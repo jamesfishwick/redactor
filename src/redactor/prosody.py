@@ -49,4 +49,32 @@ FORMS: dict[str, tuple[int, ...]] = {
     "cinquain": (2, 4, 6, 8, 2),
     "fib": (1, 1, 2, 3, 5, 8),
     "pentameter": (10,),
+    "tetrameter": (8,),
+    "ballad": (8, 6, 8, 6),
 }
+
+# A syllable count is not a meter. These forms additionally require the line's
+# stresses to match a pattern, which is checked after a line is assembled
+# because stress depends on the whole line, not on each word in isolation.
+METERS: dict[str, str] = {
+    "pentameter": "0101010101",
+    "tetrameter": "01010101",
+    "ballad": "01010101/010101/01010101/010101",
+}
+
+
+def scans(words: list[str], pattern: str) -> bool:
+    """Does this line fit the metrical pattern?
+
+    Monosyllables carry no fixed stress in CMU and take it from position, so
+    they match either slot. A secondary stress is treated the same way.
+    """
+    built = ""
+    for w in words:
+        s = stress(w)
+        if s is None:
+            return False
+        built += s
+    if len(built) != len(pattern):
+        return False
+    return all(b == "?" or b == p for b, p in zip(built, pattern))

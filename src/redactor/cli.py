@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import candidates as cand
 from . import compare, rank, render, source, tagging
-from .prosody import FORMS
+from .prosody import FORMS, METERS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,8 +53,8 @@ def main(argv=None) -> int:
             tri = tagging.trigrams(nlp, " ".join(w.text for w in words))
             print(f"pos: {len(tri)} trigrams learned from the source", file=sys.stderr)
 
-    e = cand.Enumerator(words, form, max_runs=args.runs,
-                        pos_tags=tags, allowed_trigrams=tri)
+    e = cand.Enumerator(words, form, max_runs=args.runs, pos_tags=tags,
+                        allowed_trigrams=tri, meter=METERS.get(args.form))
     found = e.all()
     print(f"candidates: {len(found)} ({args.form}, <={args.runs} runs)", file=sys.stderr)
     if not found:

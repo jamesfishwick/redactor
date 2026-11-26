@@ -76,3 +76,34 @@ class TestCandidate:
     def test_render_joins_lines(self):
         c = Candidate(((0, 1), (2,)), runs=1)
         assert c.render(words(MOBY)) == "Call me\nIshmael"
+
+
+class TestMeter:
+    def test_scans_accepts_an_iambic_line(self):
+        from redactor.prosody import scans
+        line = "I never learned the names of all the birds".split()
+        assert scans(line, "0101010101")
+
+    def test_scans_rejects_a_trochaic_opening(self):
+        from redactor.prosody import scans
+        # "watery" is stressed-unstressed-unstressed, so it cannot start an iamb
+        assert not scans(["watery", "part", "of", "the", "world"], "0101010101")
+
+    def test_scans_rejects_wrong_length(self):
+        from redactor.prosody import scans
+        assert not scans(["cat"], "0101010101")
+
+    def test_meter_filters_the_candidate_set(self):
+        from redactor.candidates import Enumerator
+        from redactor.prosody import METERS
+        plain = Enumerator(words(MOBY), (10,), max_runs=2)
+        metered = Enumerator(words(MOBY), (10,), max_runs=2,
+                             meter=METERS["pentameter"])
+        assert len(metered.all()) < len(plain.all())
+
+    def test_every_metered_candidate_scans(self):
+        from redactor.candidates import Enumerator
+        from redactor.prosody import METERS, scans
+        for c in Enumerator(words(MOBY), (10,), max_runs=2,
+                            meter=METERS["pentameter"]).all():
+            assert scans([MOBY[i] for i in c.indices()], "0101010101")

@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 
-from .prosody import syllables
+from .prosody import METERS, scans, syllables
 
 
 @dataclass(frozen=True)
@@ -48,9 +48,12 @@ class Enumerator:
     """
 
     def __init__(self, words, form, max_runs: int = 2, pos_tags=None,
-                 allowed_trigrams=None, limit: int = 5000):
+                 allowed_trigrams=None, limit: int = 5000, meter: str | None = None):
         self.w = words
         self.form = tuple(form)
+        # Stress is a property of the assembled line, so it filters results
+        # rather than pruning the walk.
+        self.meter = tuple(meter.split("/")) if meter else None
         self.max_runs = max_runs
         self.pos = pos_tags
         self.tri = allowed_trigrams
@@ -116,7 +119,17 @@ class Enumerator:
                 acc[line].pop()
 
         walk(0, 0, 0, None, None, 0, False, [[]])
+        if self.meter:
+            found = [c for c in found if self._scans(c)]
         return found
+
+    def _scans(self, candidate) -> bool:
+        if len(candidate.lines) != len(self.meter):
+            return False
+        return all(
+            scans([self.w[i].text for i in line], pattern)
+            for line, pattern in zip(candidate.lines, self.meter)
+        )
 
 
 def is_subsequence(poem_words, source_words) -> bool:
