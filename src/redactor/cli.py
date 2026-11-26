@@ -7,14 +7,20 @@ import sys
 from pathlib import Path
 
 from . import candidates as cand
-from . import compare, rank, render, source, tagging
+from . import compare, ladder, rank, render, shapes, source, tagging
 from .prosody import FORMS, METERS
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="redactor", description=__doc__)
     p.add_argument("url")
-    p.add_argument("-f", "--form", default="haiku", choices=sorted(FORMS))
+    p.add_argument("-f", "--form", default="auto",
+                   choices=["auto"] + sorted(FORMS),
+                   help="'auto' climbs to the hardest form the page admits")
+    p.add_argument("-s", "--shape",
+                   help="word-level form instead of a syllabic one: "
+                        + ", ".join(shapes.NAMES)
+                        + " (univocalic and lipogram take a letter, e.g. univocalic:o)")
     p.add_argument("-r", "--runs", type=int, default=2,
                    help="maximum contiguous spans of kept words (default 2)")
     p.add_argument("-o", "--out", type=Path, default=Path("out"))
@@ -32,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
-    form = FORMS[args.form]
+    form = FORMS.get(args.form) if args.form != "auto" else None
 
     if args.no_image:
         words = source.from_html(args.url)
@@ -45,6 +51,23 @@ def main(argv=None) -> int:
         print("too little text to erase", file=sys.stderr)
         return 1
 
+    if args.shape:
+        shape = shapes.build(args.shape)
+        keep = shapes.longest(words, shape)
+        print(f"shape: {shape.name} ({shape.rule})", file=sys.stderr)
+        if len(keep) < 3:
+            print(f"only {len(keep)} words survive that shape on this page",
+                  file=sys.stderr)
+            return 1
+        print(f"kept: {len(keep)} of {len(words)} words", file=sys.stderr)
+        print()
+        for i in keep:
+            print(words[i].text)
+        if shot is not None:
+            dest = render.erase(shot, words, keep, args.out / "erasure.png")
+            print(f"\nwrote {dest}", file=sys.stderr)
+        return 0
+
     tags = tri = None
     if not args.no_pos:
         nlp = tagging.load()
@@ -53,10 +76,35 @@ def main(argv=None) -> int:
             tri = tagging.trigrams(nlp, " ".join(w.text for w in words))
             print(f"pos: {len(tri)} trigrams learned from the source", file=sys.stderr)
 
-    e = cand.Enumerator(words, form, max_runs=args.runs, pos_tags=tags,
-                        allowed_trigrams=tri, meter=METERS.get(args.form))
-    found = e.all()
-    print(f"candidates: {len(found)} ({args.form}, <={args.runs} runs)", file=sys.stderr)
+    if args.form == "auto":
+        rung = ladder.climb(words, max_runs=args.runs, pos_tags=tags,
+                            trigrams=tri)
+        if rung is None:
+            shape_used = next(
+                (sh for sh in ladder.FALLBACK_SHAPES
+                 if len(shapes.longest(words, shapes.build(sh))) >= 6), None)
+            if shape_used is None:
+                print("no form or shape fits this page", file=sys.stderr)
+                return 1
+            sh = shapes.build(shape_used)
+            keep = shapes.longest(words, sh)
+            print(f"no metrical or syllabic form fits; fell back to "
+                  f"{sh.name} ({sh.rule})", file=sys.stderr)
+            print()
+            for i in keep:
+                print(words[i].text)
+            if shot is not None:
+                dest = render.erase(shot, words, keep, args.out / "erasure.png")
+                print(f"\nwrote {dest}", file=sys.stderr)
+            return 0
+        found = rung.candidates
+        print(f"form: {ladder.describe(rung)}", file=sys.stderr)
+    else:
+        e = cand.Enumerator(words, form, max_runs=args.runs, pos_tags=tags,
+                            allowed_trigrams=tri, meter=METERS.get(args.form))
+        found = e.all()
+        print(f"candidates: {len(found)} ({args.form}, <={args.runs} runs)",
+              file=sys.stderr)
     if not found:
         print("no erasure of this page satisfies that form; try --runs 3",
               file=sys.stderr)
