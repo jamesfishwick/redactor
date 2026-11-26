@@ -1,0 +1,24 @@
+[project]
+name = "redactor"
+version = "0.1.0"
+description = "Finds erasure poems hidden in web pages and blacks out the rest"
+requires-python = ">=3.11"
+dependencies = [
+    "pronouncing>=0.2.0",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+pos = ["spacy>=3.7"]
+render = []
+llm = ["anthropic>=0.40"]
+
+[project.scripts]
+redactor = "redactor.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/redactor"]
