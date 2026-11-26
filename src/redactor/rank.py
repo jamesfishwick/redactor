@@ -104,5 +104,47 @@ def by_gateway(candidates, words, url: str, connection: str | None = None,
     return pool[idx], note.strip()
 
 
-# kept under the old name so the CLI and compare module need no branching
-by_model = by_gateway
+def by_claude_code(candidates, words, url: str, shortlist: int = 60,
+                   timeout: int = 180):
+    """Rank with the Claude Code binary a Sprite already carries.
+
+    This bills a Claude subscription rather than an API key, which is the
+    difference between a hackathon costing nothing and costing per run. It is
+    not a Sprites connector, so it cannot be the thing that satisfies that
+    requirement on its own.
+    """
+    import shutil
+    import subprocess
+
+    exe = shutil.which("claude")
+    if not exe:
+        return None
+    pool = candidates[:shortlist]
+    listing = "\n\n".join(f"{n + 1}.\n{c.render(words)}" for n, c in enumerate(pool))
+    try:
+        proc = subprocess.run(
+            [exe, "-p", PROMPT.format(url=url, listing=listing)],
+            capture_output=True, text=True, errors="replace", timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = proc.stdout.strip()
+    if not text or "Not logged in" in text:
+        return None
+    head, _, note = text.partition("\n")
+    digits = "".join(ch for ch in head if ch.isdigit())
+    if not digits:
+        return None
+    idx = int(digits) - 1
+    if not 0 <= idx < len(pool):
+        return None
+    return pool[idx], note.strip()
+
+
+def by_model(candidates, words, url: str, **kw):
+    """Try each ranker in turn; fall through to None so the caller can choose
+    arbitrarily rather than fail."""
+    for ranker in (by_gateway, by_claude_code):
+        got = ranker(candidates, words, url)
+        if got:
+            return got
+    return None
