@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import candidates as cand
-from . import rank, render, source, tagging
+from . import compare, rank, render, source, tagging
 from .prosody import FORMS
 
 
@@ -24,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-llm", action="store_true", help="never call a model")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--show", type=int, default=5, help="how many candidates to print")
+    p.add_argument("--compare", action="store_true",
+                   help="print one poem per method with its candidate count")
     return p
 
 
@@ -59,6 +61,17 @@ def main(argv=None) -> int:
         print("no erasure of this page satisfies that form; try --runs 3",
               file=sys.stderr)
         return 1
+
+    if args.compare:
+        attempts = compare.run(words, form, max_runs=args.runs, pos_tags=tags,
+                               trigrams=tri, seed=args.seed, url=args.url,
+                               use_model=not args.no_llm)
+        print(compare.report(attempts, words))
+        best = next((a.poem for a in reversed(attempts) if a.poem), None)
+        if shot is not None and best is not None:
+            dest = render.erase(shot, words, best.indices(), args.out / "erasure.png")
+            print(f"\nwrote {dest}", file=sys.stderr)
+        return 0
 
     note = ""
     chosen = None
