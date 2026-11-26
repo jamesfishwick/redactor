@@ -74,17 +74,34 @@ def screenshot(url: str, png: Path, width: int = 1000, height: int = 1500,
 
 
 def find_chrome() -> str | None:
-    candidates = [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "chromium", "chromium-browser", "google-chrome", "google-chrome-stable",
-    ]
-    for c in candidates:
-        if c.startswith("/") and Path(c).exists():
-            return c
-        found = shutil.which(c)
-        if found:
+    """Locate a usable browser binary.
+
+    Playwright's download is checked before anything on PATH because Ubuntu
+    ships `chromium-browser` as a snap stub, which refuses to run anywhere a
+    snap daemon is absent, such as a container.
+    """
+    for pattern in ("chromium-*/chrome-linux*/chrome",
+                    "chromium_headless_shell-*/chrome-headless-shell-linux*"
+                    "/chrome-headless-shell"):
+        for hit in sorted(Path.home().glob(f".cache/ms-playwright/{pattern}")):
+            if hit.exists():
+                return str(hit)
+
+    direct = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if Path(direct).exists():
+        return direct
+    for name in ("google-chrome", "google-chrome-stable", "chromium",
+                 "chromium-browser"):
+        found = shutil.which(name)
+        if found and _runnable(found):
             return found
     return None
+
+
+def _runnable(exe: str) -> bool:
+    probe = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                           errors="replace", timeout=30)
+    return "snap" not in (probe.stdout + probe.stderr).lower()
 
 
 def from_image(png: Path, min_conf: float = 55.0) -> list[Word]:
