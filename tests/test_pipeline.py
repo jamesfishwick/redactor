@@ -219,8 +219,10 @@ class TestTsvParsing:
               "left\ttop\twidth\theight\tconf\ttext")
 
     def tsv(self, *words):
-        """Rows in Tesseract's shape. A word may carry its own line key, since
-        that key is what render groups adjacent kept words by."""
+        """Word rows only, at level 5. Real output interleaves page, block,
+        paragraph and line rows, which test_hierarchy_rows_are_dropped covers
+        separately. A word may carry its own line key, since that key is what
+        render splits restored runs on."""
         rows = [self.HEADER]
         for n, word in enumerate(words, 1):
             text, top, conf = word[:3]
@@ -274,12 +276,26 @@ class TestTsvParsing:
         assert [w.text for w in got] == ["alpha", "beta", "gamma"]
 
     def test_the_line_key_follows_the_row(self):
-        """render groups adjacent kept words into one restored run by this key,
-        so a reordering of it merges runs across a line break on the page."""
+        """render splits a restored run where this key changes, so a key that
+        goes empty or constant merges runs across a line break and composites
+        one chip over two lines of the page. Reordering its parts cannot merge
+        anything, since the triples stay distinct, but it mislabels them."""
         got = source.words_from_tsv(self.tsv(
             ("first", 10, 96, (1, 1, 1)), ("same", 10, 95, (1, 1, 1)),
             ("other", 30, 94, (2, 3, 4))))
         assert [w.line for w in got] == ["1-1-1", "1-1-1", "2-3-4"]
+
+    def test_hierarchy_rows_are_dropped(self):
+        """Every real page carries these. Tesseract emits one row per page,
+        block, paragraph and line alongside the word rows, each with an empty
+        text column and a confidence of -1, so the empty-text branch runs on
+        input the fixture's word rows never produce."""
+        rows = [self.HEADER,
+                "1\t1\t0\t0\t0\t0\t0\t0\t1000\t1500\t-1\t",
+                "4\t1\t1\t1\t1\t0\t50\t10\t200\t12\t-1\t",
+                "5\t1\t1\t1\t1\t1\t50\t10\t40\t12\t96.687843\tsurvivor"]
+        got = source.words_from_tsv("\n".join(rows) + "\n")
+        assert [w.text for w in got] == ["survivor"]
 
     def test_low_confidence_words_are_still_dropped(self):
         got = source.words_from_tsv(self.tsv(("solid", 10, 96), ("junk", 10, 12)))

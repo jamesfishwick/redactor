@@ -111,8 +111,8 @@ MIN_CONF = 55.0
 def from_image(png: Path, min_conf: float = MIN_CONF) -> list[Word]:
     """OCR the rendered page into positioned words.
 
-    The exit code is deliberately not consulted, so the output is judged by
-    whether rows came back. See the comment below.
+    A malformed stream raises out of the parse and is not caught here, so a
+    caller wanting a page to degrade rather than abort has to catch it.
     """
     # Tesseract exits non-zero on Leptonica warnings it has already recovered
     # from, so the exit code says nothing about whether the TSV is usable.
@@ -138,21 +138,26 @@ def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:
     Tesseract never quotes its fields, but the words inside them are whatever
     was on the page. Under the default dialect a field that *begins* with a
     double quote opens a quoted field, and the reader then runs past tabs and
-    newlines to the next field-opening quote in the stream, or to the end of
-    input if nothing closes it. A quote in the middle of a token, or at its
-    end, opens nothing.
+    newlines to the next double quote anywhere in the stream, or to the end of
+    input if none follows. The two halves are not symmetric: opening takes a
+    quote at the start of a field, while closing takes one anywhere at all,
+    including inside a later token or at its end.
 
     The rows it runs past are not dropped. They are absorbed into the text of
     the row that opened the quote, which passes every filter below and becomes
     one Word holding a blob of raw TSV at the opening word's position. Past
     `csv.field_size_limit()` the reader raises instead of absorbing.
 
-    Either way the real words stop arriving here, and `render.erase` sizes its
-    cover from the words it is handed, so anything past the last surviving
-    word falls outside that cover and stays legible on the finished page.
+    When the rows are absorbed, the real words stop arriving here. `render.erase`
+    sizes its cover from the words it is handed, so anything past the last
+    surviving word falls outside that cover and stays legible on the finished
+    page. When the limit is hit instead, the reader raises and no page is
+    produced at all, which is the louder and safer of the two.
 
-    QUOTE_NONE is what turns the special case off. quotechar=None is set with
-    it so that restoring a quotechar alone cannot quietly re-enable quoting.
+    QUOTE_NONE is what turns the special case off, and either setting alone
+    would do it. quotechar=None is set with it because dropping QUOTE_NONE
+    then raises TypeError at construction, where dropping it on its own would
+    re-enable quoting silently.
     """
     words = []
     for row in csv.DictReader(io.StringIO(tsv), delimiter="\t",
