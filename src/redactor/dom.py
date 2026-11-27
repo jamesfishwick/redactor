@@ -53,7 +53,9 @@ EXTRACT = r"""() => {
     if (HEADING.has(parent.tagName)) section++;
     const style = getComputedStyle(parent);
     if (style.visibility === 'hidden' || style.display === 'none') continue;
-    const furniture = !!parent.closest(CHROME);
+    const marked = document.querySelector('[data-redactor-article]');
+    const outside = marked && !parent.closest('[data-redactor-article]');
+    const furniture = outside || !!parent.closest(CHROME);
     const re = /\S+/g;
     let match;
     while ((match = re.exec(node.nodeValue))) {
@@ -171,6 +173,11 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
             page = browser.new_page(viewport={"width": width, "height": height})
             page.goto(url, wait_until="domcontentloaded", timeout=timeout)
             page.wait_for_timeout(settle)
+            try:
+                page.add_script_tag(url=READABILITY_CDN)
+                page.evaluate(MARK_ARTICLE)
+            except Exception:
+                pass             # a page that blocks the CDN still gets read
             raw = page.evaluate(EXTRACT)
             title = page.title()
             kept = _choose(raw, body_only, section)
@@ -198,6 +205,60 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
         ))
         sections.append(w.get("sec", 0))
     return Read(words, str(png), title, sections) if words else None
+
+
+# Mozilla's Readability, the algorithm behind Firefox Reader Mode. Run in the
+# page rather than over fetched HTML, because the boxes have to come from the
+# same DOM the words do and an extractor working on a copy has no coordinates
+# to hand back.
+READABILITY_CDN = "https://cdn.jsdelivr.net/npm/@mozilla/readability@0.5.0/Readability.js"
+
+# Readability parses a clone, so its result cannot be matched back by node.
+# Matching it back by text does not work either: a forward walk over tokens
+# loses alignment on the first common word and keeps a soup of "the" and "to".
+#
+# So take the ends instead. Find the live elements holding the article's first
+# and last distinctive phrases, walk up to their common ancestor, and mark it.
+# The extractor then keeps what is inside, which is a question about node
+# identity rather than about text.
+MARK_ARTICLE = r"""() => {
+  if (typeof Readability === 'undefined') return false;
+  let parsed;
+  try {
+    parsed = new Readability(document.cloneNode(true), {charThreshold: 200}).parse();
+  } catch (e) { return false; }
+  if (!parsed || !parsed.textContent) return false;
+
+  const text = parsed.textContent.replace(/\s+/g, ' ').trim();
+  if (text.length < 400) return false;
+  const words = text.split(' ');
+  const head = words.slice(0, 8).join(' ');
+  const tail = words.slice(-8).join(' ');
+
+  const find = (phrase) => {
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node, best = null;
+    const want = phrase.toLowerCase().slice(0, 60);
+    while ((node = walk.nextNode())) {
+      const t = node.nodeValue.replace(/\s+/g, ' ').trim().toLowerCase();
+      if (t.length > 8 && want.startsWith(t.slice(0, 30))) { best = node; break; }
+      if (t.includes(want.slice(0, 30))) { best = node; break; }
+    }
+    return best ? best.parentElement : null;
+  };
+
+  let a = find(head), b = find(tail);
+  if (!a && !b) return false;
+  let box = a || b;
+  if (a && b) {
+    box = a;
+    while (box && !box.contains(b)) box = box.parentElement;
+  }
+  // Never let it climb to the whole document, which would mark everything.
+  if (!box || box === document.body || box === document.documentElement) return false;
+  box.setAttribute('data-redactor-article', '1');
+  return true;
+}"""
 
 
 def _choose(raw, body_only: bool, section: str):
