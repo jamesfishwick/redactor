@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import candidates as cand
-from . import compare, ladder, publish, rank, render, shapes, source, tagging
+from . import agent, compare, ladder, publish, rank, render, shapes, source, tagging
 from .prosody import FORMS, METERS
 
 
