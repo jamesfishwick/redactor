@@ -240,3 +240,60 @@ class TestVisualRuns:
         w = self._laid_out(src, ["a"] * 6 + ["b"] * 7)
         e = Enumerator(w, (10,), max_runs=2)
         assert e.count() == len(e.all())
+
+
+class TestLongPages:
+    def test_a_long_page_does_not_blow_the_stack(self):
+        from redactor.candidates import Enumerator
+        from redactor.source import Word
+        # longer than the default recursion limit, which the DOM reader can reach
+        src = ("I thought I would sail about a little and see the watery "
+               "part of the world ") * 90
+        w = [Word(t, left=0, top=0, width=9, height=9, line="a")
+             for t in src.split()]
+        assert len(w) > 1000
+        assert Enumerator(w, (5, 7, 5), max_runs=1, limit=20).all()
+
+
+class TestSpace:
+    def _page(self, repeat=1):
+        from redactor.source import Word
+        src = (MOBY * repeat)
+        return [Word(t, left=0, top=0, width=9, height=9, line=f"l{i // 12}")
+                for i, t in enumerate(src)]
+
+    def test_count_agrees_with_the_recursive_enumerator(self):
+        from redactor.candidates import Enumerator, Space
+        w = self._page()
+        assert Space(w, (5, 7, 5), max_runs=2).count() == \
+               Enumerator(w, (5, 7, 5), max_runs=2).count()
+
+    def test_handles_a_page_that_overflows_recursion(self):
+        from redactor.candidates import Space
+        w = self._page(repeat=40)      # ~1700 words
+        assert len(w) > 1500
+        assert Space(w, (5, 7, 5), max_runs=2).count() > 0
+
+    def test_samples_are_valid_poems(self):
+        from redactor.candidates import Space, is_subsequence
+        from redactor.prosody import syllables
+        w = self._page(repeat=3)
+        space = Space(w, (5, 7, 5), max_runs=2)
+        for c in space.sample(25, __import__("random").Random(1)):
+            counts = [sum(syllables(w[i].text) for i in line) for line in c.lines]
+            assert counts == [5, 7, 5]
+            assert is_subsequence([w[i].text for i in c.indices()],
+                                  [x.text for x in w])
+
+    def test_sampling_spreads_across_the_page(self):
+        from redactor.candidates import Space
+        w = self._page(repeat=6)
+        got = Space(w, (5, 7, 5), max_runs=2).sample(40, __import__("random").Random(2))
+        starts = [c.indices()[0] for c in got]
+        # a slice of the enumeration would cluster; a sample should not
+        assert max(starts) - min(starts) > len(w) // 4
+
+    def test_empty_space_samples_nothing(self):
+        from redactor.candidates import Space
+        from redactor.source import Word
+        assert Space([Word("cat")], (5, 7, 5), max_runs=2).sample(5) == []

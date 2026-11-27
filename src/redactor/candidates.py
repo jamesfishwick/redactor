@@ -22,8 +22,13 @@ weaker proxy for the same thing.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
+
+# One frame per word, and callers cap their input well below this. The margin
+# is for a page that slips through with an unusual word count.
+sys.setrecursionlimit(max(sys.getrecursionlimit(), 5000))
 
 from .prosody import METERS, scans, syllables
 
@@ -145,6 +150,111 @@ class Enumerator:
             scans([self.w[i].text for i in line], pattern)
             for line, pattern in zip(candidate.lines, self.meter)
         )
+
+
+class Space:
+    """The whole candidate space of one page, counted bottom-up and sampled.
+
+    Two things the recursive walk could not do. It recursed once per word, so
+    a 7,487-word article overflowed the stack and the page had to be truncated
+    to 600 words; and enumerating "the first N" returns N poems from one region
+    of the page rather than a sample of the space. Both matter, because a short
+    form drawn from a large page is only good if the choice is wide: that page
+    admits 182,040 ballads in its first 600 words and millions across all of it.
+
+    `prev` collapses to a boolean. A run continues only when the previous word
+    was kept *and* was the immediately preceding one, so the table needs to know
+    whether word i-1 survived, not which word it was.
+    """
+
+    def __init__(self, words, form, max_runs: int = 2):
+        self.w = words
+        self.form = tuple(form)
+        self.max_runs = max_runs
+        self.syl = [syllables(x.text) for x in words]
+        self.line = [getattr(x, "line", "") for x in words]
+        self._table = None
+
+    def _build(self):
+        n, form, syl, line = len(self.w), self.form, self.syl, self.line
+        L, U, R = len(form), max(form) + 1, self.max_runs + 1
+        # table[i][l][u][r][p] = completions from word i onward
+        table = [[[[[0, 0] for _ in range(R)] for _ in range(U)]
+                  for _ in range(L + 1)] for _ in range(n + 1)]
+        for l in range(L + 1):
+            for u in range(U):
+                for r in range(R):
+                    for p in (0, 1):
+                        table[n][l][u][p if False else r][p] = 0
+        # a finished poem: every line filled exactly
+        for r in range(R):
+            for p in (0, 1):
+                table[n][L][0][r][p] = 1
+
+        for i in range(n, -1, -1):
+            for l in range(L, -1, -1):
+                for u in range(U - 1, -1, -1):
+                    for r in range(R):
+                        for p in (0, 1):
+                            if l == L:
+                                table[i][l][u][r][p] = 1 if u == 0 else 0
+                                continue
+                            if u == form[l]:
+                                table[i][l][u][r][p] = table[i][l + 1][0][r][p]
+                                continue
+                            if i == n:
+                                table[i][l][u][r][p] = 0
+                                continue
+                            total = table[i + 1][l][u][r][0]
+                            s = syl[i]
+                            joins = p == 1 and i > 0 and line[i - 1] == line[i]
+                            nr = r + (0 if joins else 1)
+                            if u + s <= form[l] and nr <= self.max_runs:
+                                total += table[i + 1][l][u + s][nr][1]
+                            table[i][l][u][r][p] = total
+        self._table = table
+
+    def count(self) -> int:
+        if self._table is None:
+            self._build()
+        return self._table[0][0][0][0][0]
+
+    def sample(self, k: int, rng=None) -> list[Candidate]:
+        """Draw k poems uniformly at random from the whole space.
+
+        Uniform because each branch is taken in proportion to how many whole
+        poems lie down it, which is what the table already holds. Without this
+        a ranker sees only whichever corner of the page the walk reached first.
+        """
+        import random
+        rng = rng or random.Random()
+        if self._table is None:
+            self._build()
+        if not self.count():
+            return []
+        n, form, syl, line = len(self.w), self.form, self.syl, self.line
+        t, out = self._table, []
+        for _ in range(k):
+            i, l, u, r, p = 0, 0, 0, 0, 0
+            lines, cur = [], []
+            while l < len(form):
+                if u == form[l]:
+                    lines.append(tuple(cur)); cur = []
+                    l, u = l + 1, 0
+                    continue
+                skip = t[i + 1][l][u][r][0] if i < n else 0
+                s = syl[i] if i < n else 0
+                joins = p == 1 and i > 0 and line[i - 1] == line[i]
+                nr = r + (0 if joins else 1)
+                keep = (t[i + 1][l][u + s][nr][1]
+                        if i < n and u + s <= form[l] and nr <= self.max_runs else 0)
+                if keep and rng.random() < keep / (keep + skip):
+                    cur.append(i); u += s; r, p = nr, 1
+                else:
+                    p = 0
+                i += 1
+            out.append(Candidate(tuple(lines), r))
+        return out
 
 
 def is_subsequence(poem_words, source_words) -> bool:

@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .candidates import Enumerator
-from .prosody import FORMS, METERS
+from .candidates import Enumerator, Space
+from .prosody import FORMS, METERS, scans
 
 # hardest first
 RUNGS: tuple[str, ...] = (
@@ -43,15 +43,41 @@ class Rung:
 
 
 def climb(words, *, max_runs=2, pos_tags=None, trigrams=None,
-          want=1, limit=20000) -> Rung | None:
-    """Return the hardest form this page admits, with its candidates."""
+          want=1, limit=20000, sample=60, max_draws=40000,
+          rng=None) -> Rung | None:
+    """Return the hardest form this page admits, with candidates to choose from.
+
+    The candidates are drawn uniformly from the whole space rather than taken
+    from the front of an enumeration. A short form is only good when the choice
+    behind it is wide, and one page measured here admits 182,040 ballads in its
+    first 600 words alone; handing a ranker the first sixty of those gives it
+    sixty poems from one corner of the page.
+    """
     for name in RUNGS:
         meter = METERS.get(name)
-        e = Enumerator(words, FORMS[name], max_runs=max_runs, pos_tags=pos_tags,
-                       allowed_trigrams=trigrams, limit=limit, meter=meter)
-        found = e.all()
-        if len(found) >= want:
-            return Rung(name, meter is not None, len(found), found)
+        space = Space(words, FORMS[name], max_runs=max_runs)
+        pool = space.count()
+        if pool < want:
+            continue
+        if not meter:
+            drawn = space.sample(sample, rng)
+        else:
+            # Scansion is checked after a line exists, not while it is built,
+            # so metered forms are sampled until enough survive. On one page
+            # fewer than one draw in a hundred scans, which is the whole
+            # reason the ranker was being handed two poems out of 26 million.
+            patterns = meter.split("/")
+            drawn, tries = [], 0
+            while len(drawn) < sample and tries < max_draws:
+                batch = space.sample(min(2000, max_draws - tries), rng)
+                tries += len(batch)
+                drawn += [c for c in batch
+                          if len(c.lines) == len(patterns)
+                          and all(scans([words[i].text for i in line], pat)
+                                  for line, pat in zip(c.lines, patterns))]
+        drawn = drawn[:sample]
+        if len(drawn) >= want:
+            return Rung(name, meter is not None, pool, drawn)
     return None
 
 

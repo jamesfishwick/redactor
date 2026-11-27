@@ -96,6 +96,12 @@ def next_job(connection: str, repo: str,
 
 MIN_WORDS = 120     # below this a page yields a pool too small to choose from
 
+# No cap. A cap was here while the enumerator recursed once per word, and it
+# cost exactly what matters: a 7,487-word article was read down to 600, and the
+# ballad finally chosen came from 182,040 candidates when millions were on the
+# page. More source is not more poem, since the form is a fixed size either way.
+# It is a wider choice of which fixed-size poem to keep.
+
 # A viewport-sized shot catches only the top of a page. The Hacksgiving rules
 # gave 92 words at 1000x1500 against 504 in its HTML, which is the difference
 # between declining a page and erasing it. Taller is also a better picture:
@@ -105,21 +111,35 @@ SHOT = (1100, 5000)
 
 def erase_page(url: str, *, out: Path, runs: int = 2, use_pos: bool = False,
                shot_size: tuple[int, int] = SHOT):
-    """Screenshot, read, enumerate. Returns (words, rung, shot) or None."""
-    from . import ladder, source, tagging
+    """Read the page, enumerate its erasures. Returns (words, rung, shot) or None.
 
-    try:
-        shot = source.screenshot(url, out / "page.png",
-                                 width=shot_size[0], height=shot_size[1])
-        html = source.page_html(url)
-        pairs = source.article_bigrams(html) if html else None
-        words = source.from_image(shot, pairs=pairs)
-        if len(words) < MIN_WORDS and pairs is not None:
-            # The extractor found little or nothing it recognised as an
-            # article. Better a page with chrome in it than no page at all.
-            words = source.from_image(shot)
-    except Exception:
-        return None
+    The DOM is asked first and OCR is the fallback, not the other way round.
+    A browser knows each word exactly and knows whether it sits in a nav or a
+    footer; OCR guesses at both. OCR stays for the case the DOM cannot answer,
+    such as a page that is an image of text.
+    """
+    from . import dom, ladder, source, tagging
+
+    shot_path = out / "page.png"
+    words = None
+    got = dom.read(url, shot_path, width=shot_size[0])
+    if got is not None:
+        words, shot = got.words, Path(got.png)
+
+    if words is None or len(words) < MIN_WORDS:
+        try:
+            shot = source.screenshot(url, shot_path,
+                                     width=shot_size[0], height=shot_size[1])
+            html = source.page_html(url)
+            pairs = source.article_bigrams(html) if html else None
+            ocr = source.from_image(shot, pairs=pairs)
+            if len(ocr) < MIN_WORDS and pairs is not None:
+                ocr = source.from_image(shot)
+            if words is None or len(ocr) > len(words):
+                words = ocr
+        except Exception:
+            if words is None:
+                return None
     if len(words) < MIN_WORDS:
         return None
 
