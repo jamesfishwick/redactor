@@ -101,6 +101,7 @@ def publish(connection: str, repo: str, *, url: str, poem: str, form: str,
         if got:
             written["image"] = got
             image_url = raw_url(repo, f"{folder}/erasure.png")
+            written["image_raw"] = image_url
 
     body = page(url=url, poem=poem, form=form, pool=pool, note=note,
                 image_url=image_url, via=via)
@@ -125,14 +126,33 @@ This file is written by the agent. Nothing here is hand-edited.
 """
 
 
+def _inline_text(payload) -> str | None:
+    """The file's text, or None when the API would not inline it.
+
+    Contents returns the base64 body only below 1MB. Above that it answers with
+    an empty string and `encoding: none`, which is indistinguishable from an
+    empty file unless the encoding is checked. Treating it as empty rewrote the
+    gallery from scratch over the existing sha, losing every earlier entry in a
+    commit nobody was watching.
+    """
+    if not payload:
+        return ""
+    if payload.get("encoding") != "base64":
+        return None
+    return base64.b64decode(payload.get("content") or "").decode("utf-8", "replace")
+
+
 def _prepend_gallery(connection: str, repo: str, *, stamp: str, url: str,
                      poem: str, form: str, image_url: str | None,
                      folder: str) -> None:
     existing = _call(connection, f"repos/{repo}/contents/GALLERY.md")
-    body = ""
-    if existing and existing.get("content"):
-        body = base64.b64decode(existing["content"]).decode("utf-8", "replace")
-        body = body[len(GALLERY_HEAD):] if body.startswith(GALLERY_HEAD) else body
+    body = _inline_text(existing)
+    if body is None:
+        raise RuntimeError(
+            "GALLERY.md is too large for the contents API to return inline; "
+            "refusing to rewrite it from scratch")
+    if body.startswith(GALLERY_HEAD):
+        body = body[len(GALLERY_HEAD):]
 
     entry = [f"## {stamp}", "", "```", poem, "```", ""]
     if image_url:
