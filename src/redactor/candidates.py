@@ -43,8 +43,17 @@ class Candidate:
 class Enumerator:
     """Walks the source once per form, pruning as it goes.
 
-    `max_runs` counts contiguous spans of kept words across the whole poem, not
-    per line, because a run that crosses a line break still reads as one phrase.
+    `max_runs` counts contiguous spans across the whole poem rather than per
+    line, because a phrase that wraps still reads as one run.
+
+    A span must be adjacent in reading order *and* on the same line of the
+    page. Those are not the same thing: OCR order walks a column, then jumps to
+    a nav bar, a sidebar and a footer, so two words next to each other in the
+    stream can sit a thousand pixels apart. Counting only reading order made
+    the enumerator believe a candidate had two unbroken spans when the page
+    showed five scattered chips, and contiguity is the one constraint carrying
+    grammar here. A short screenshot hides this, since one column of prose has
+    reading order and visual order mostly agreeing.
     """
 
     def __init__(self, words, form, max_runs: int = 2, pos_tags=None,
@@ -59,6 +68,12 @@ class Enumerator:
         self.tri = allowed_trigrams
         self.limit = limit
         self.syl = [syllables(x.text) for x in words]
+        # Where a line of the page ends, so a run cannot silently cross it.
+        self.line = [getattr(x, "line", "") for x in words]
+
+    def _joins(self, prev_i: int, i: int) -> bool:
+        """Does keeping word i extend the run that ended at prev_i?"""
+        return prev_i == i - 1 and self.line[prev_i] == self.line[i]
 
     def _pos_ok(self, p1, p2, i) -> bool:
         if not self.tri or self.pos is None:
@@ -78,15 +93,15 @@ class Enumerator:
                 return walk(i, line + 1, 0, p1, p2, runs, prev)
             if i == n:
                 return 0
-            total = walk(i + 1, line, used, p1, p2, runs, False)
+            total = walk(i + 1, line, used, p1, p2, runs, -1)
             s = syl[i]
-            nr = runs + (0 if prev else 1)
+            nr = runs + (0 if (prev >= 0 and self._joins(prev, i)) else 1)
             if used + s <= form[line] and nr <= self.max_runs and self._pos_ok(p1, p2, i):
                 nxt = self.pos[i] if self.pos else None
-                total += walk(i + 1, line, used + s, p2, nxt, nr, True)
+                total += walk(i + 1, line, used + s, p2, nxt, nr, i)
             return total
 
-        return walk(0, 0, 0, None, None, 0, False)
+        return walk(0, 0, 0, None, None, 0, -1)
 
     def all(self) -> list[Candidate]:
         n, form, syl = len(self.w), self.form, self.syl
@@ -109,16 +124,16 @@ class Enumerator:
                 return
             if i == n:
                 return
-            walk(i + 1, line, used, p1, p2, runs, False, acc)
+            walk(i + 1, line, used, p1, p2, runs, -1, acc)
             s = syl[i]
-            nr = runs + (0 if prev else 1)
+            nr = runs + (0 if (prev >= 0 and self._joins(prev, i)) else 1)
             if used + s <= form[line] and nr <= self.max_runs and self._pos_ok(p1, p2, i):
                 nxt = self.pos[i] if self.pos else None
                 acc[line].append(i)
-                walk(i + 1, line, used + s, p2, nxt, nr, True, acc)
+                walk(i + 1, line, used + s, p2, nxt, nr, i, acc)
                 acc[line].pop()
 
-        walk(0, 0, 0, None, None, 0, False, [[]])
+        walk(0, 0, 0, None, None, 0, -1, [[]])
         if self.meter:
             found = [c for c in found if self._scans(c)]
         return found

@@ -208,3 +208,35 @@ class TestScansionEvidence:
     def test_content_words_ignores_function_words(self):
         from redactor.prosody import content_words
         assert content_words("the clock that tells the time".split()) == 3
+
+
+class TestVisualRuns:
+    def _laid_out(self, tokens, lines):
+        """Words with explicit page-line ids, as OCR would report them."""
+        from redactor.source import Word
+        return [Word(t, left=0, top=0, width=10, height=10, line=l)
+                for t, l in zip(tokens, lines)]
+
+    def test_a_run_cannot_cross_a_page_line(self):
+        from redactor.candidates import Enumerator
+        # adjacent in reading order, but the page puts them in different blocks
+        src = "I thought I would sail about a little and see".split()
+        same = self._laid_out(src, ["1-1-1"] * len(src))
+        split = self._laid_out(src, ["1-1-1"] * 5 + ["9-9-9"] * 5)
+        assert Enumerator(same, (10,), max_runs=1).count() >= \
+               Enumerator(split, (10,), max_runs=1).count()
+
+    def test_one_run_stays_on_one_line(self):
+        from redactor.candidates import Enumerator
+        src = "I thought I would sail about a little and see the watery part".split()
+        w = self._laid_out(src, ["a"] * 6 + ["b"] * 7)
+        for c in Enumerator(w, (10,), max_runs=1).all():
+            idx = c.indices()
+            assert len({w[i].line for i in idx}) == 1
+
+    def test_count_still_agrees_with_enumeration(self):
+        from redactor.candidates import Enumerator
+        src = "I thought I would sail about a little and see the watery part".split()
+        w = self._laid_out(src, ["a"] * 6 + ["b"] * 7)
+        e = Enumerator(w, (10,), max_runs=2)
+        assert e.count() == len(e.all())
