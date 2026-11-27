@@ -1,5 +1,10 @@
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
+from redactor import render
 from redactor.candidates import Candidate, Enumerator, is_subsequence
 from redactor.prosody import syllables
 from redactor.source import Word
@@ -208,3 +213,150 @@ class TestScansionEvidence:
     def test_content_words_ignores_function_words(self):
         from redactor.prosody import content_words
         assert content_words("the clock that tells the time".split()) == 3
+
+
+class TestFluidColor:
+    """The whiteout tone is mixed from the page rather than fixed.
+
+    The numbers come from the work the look is taken from: a scan of Mary
+    Ruefle's *A Little White Shadow*, where the paper reads (237,212,188) and
+    the correction fluid over it (244,240,242).
+    """
+
+    RUEFLE_PAPER = (237, 212, 188)
+    RUEFLE_FLUID = (244, 240, 242)
+
+    def test_reproduces_the_reference(self):
+        mixed = render.fluid_color(self.RUEFLE_PAPER)
+        got = tuple(int(mixed[i:i + 2], 16) for i in (1, 3, 5))
+        assert all(abs(a - b) <= 4 for a, b in zip(got, self.RUEFLE_FLUID)), got
+
+    def test_takes_the_color_out(self):
+        r, g, b = (int(render.fluid_color(self.RUEFLE_PAPER)[i:i + 2], 16)
+                   for i in (1, 3, 5))
+        assert max(r, g, b) - min(r, g, b) < 10
+
+    def test_lightens_ordinary_paper(self):
+        paper = (200, 190, 180)
+        fluid = int(render.fluid_color(paper)[1:3], 16)
+        assert fluid > paper[0]
+
+    def test_darkens_when_there_is_no_headroom(self):
+        """White paper has nowhere lighter to go, so the fluid goes the other
+        way; a pure white stroke on a white page is no stroke at all."""
+        fluid = int(render.fluid_color((255, 255, 255))[1:3], 16)
+        assert fluid < 255
+
+    def test_handles_a_dark_page(self):
+        fluid = int(render.fluid_color((20, 20, 24))[1:3], 16)
+        assert fluid > 20
+
+
+class TestHalo:
+    """The paper left around a kept run must not uncover its neighbours."""
+
+    def row(self, *spans):
+        return [Word(t, left=l, top=10, width=w, height=12, line="1")
+                for t, l, w in spans]
+
+    def test_stops_short_of_a_close_neighbour(self):
+        ws = self.row(("kept", 100, 40), ("next", 148, 40))
+        left, top, right, bottom = render._halo([0], ws, pad=20)
+        assert right <= 148, f"halo reached {right}, neighbour starts at 148"
+
+    def test_splits_the_gap_rather_than_taking_it_all(self):
+        ws = self.row(("kept", 100, 40), ("next", 160, 40))
+        _, _, right, _ = render._halo([0], ws, pad=20)
+        assert right == 140 + (20 - render.SAFETY) // 2
+
+    def test_holds_back_a_safety_margin(self):
+        """OCR boxes can sit inside their own glyphs, so an exact half-gap is
+        not a safe stopping place."""
+        ws = self.row(("kept", 100, 40), ("next", 140 + render.SAFETY, 40))
+        _, _, right, _ = render._halo([0], ws, pad=20)
+        assert right == 140
+
+    def test_uses_the_full_pad_with_room_to_spare(self):
+        ws = self.row(("kept", 100, 40), ("next", 400, 40))
+        _, _, right, _ = render._halo([0], ws, pad=7)
+        assert right == 147
+
+    def test_clamps_against_the_line_above(self):
+        ws = [Word("above", left=100, top=0, width=40, height=12, line="1"),
+              Word("kept", left=100, top=16, width=40, height=12, line="2")]
+        _, top, _, _ = render._halo([1], ws, pad=20)
+        assert top >= 12, f"halo reached {top}, line above ends at 12"
+
+    def test_ignores_a_word_that_does_not_sit_over_the_run(self):
+        """A word on the line above but elsewhere across the page cannot be
+        uncovered by padding upward, so it must not clamp the halo."""
+        ws = [Word("elsewhere", left=400, top=0, width=40, height=12, line="1"),
+              Word("kept", left=100, top=16, width=40, height=12, line="2")]
+        _, top, _, _ = render._halo([1], ws, pad=6)
+        assert top == 10
+
+
+class TestErase:
+    def test_rejects_an_unknown_style(self):
+        with pytest.raises(ValueError, match="unknown style"):
+            render.erase(Path("x.png"), [], [], Path("y.png"), style="scribble")
+
+    def test_needs_positioned_words(self):
+        with pytest.raises(ValueError, match="positioned"):
+            render.column([Word("unplaced")])
+
+
+@pytest.mark.skipif(shutil.which("magick") is None, reason="needs ImageMagick")
+class TestErasePixels:
+    """Whatever the style, a word the poem does not keep must not survive."""
+
+    def page(self, tmp_path):
+        """Two dark bars on tan paper, standing in for two words."""
+        png = tmp_path / "page.png"
+        subprocess.run(
+            ["magick", "-size", "400x120", "xc:#edd4bc", "-fill", "#2a2018",
+             "-draw", "rectangle 40,40 140,64",
+             "-draw", "rectangle 240,40 340,64", str(png)], check=True)
+        return png, [Word("kept", left=40, top=40, width=100, height=24, line="1"),
+                     Word("gone", left=240, top=40, width=100, height=24, line="1")]
+
+    def contrast(self, png, box, around=10):
+        """Spread of tone over a word and the paper around it.
+
+        Not darkness: a black bar laid over a word is as dark as the word was,
+        so darkness cannot tell a covered word from an uncovered one. What
+        covering a word destroys is the difference between its ink and the page
+        it sits on, whatever color it was covered with.
+        """
+        x0, y0, x1, y1 = (box[0] - around, box[1] - around,
+                          box[2] + around, box[3] + around)
+        out = subprocess.run(
+            ["magick", str(png), "-crop", f"{x1 - x0}x{y1 - y0}+{x0}+{y0}",
+             "+repage", "-colorspace", "Gray",
+             "-format", "%[fx:standard_deviation]", "info:"],
+            capture_output=True, text=True, check=True).stdout
+        return float(out)
+
+    @pytest.mark.parametrize("style", ["black", "whiteout"])
+    def test_the_erased_word_goes_and_the_kept_word_stays(self, tmp_path, style):
+        png, ws = self.page(tmp_path)
+        dest = render.erase(png, ws, [0], tmp_path / "out.png", style=style,
+                            seed=1)
+        assert self.contrast(dest, (40, 40, 140, 64)) > 0.15, "kept word lost"
+        assert self.contrast(dest, (240, 40, 340, 64)) < 0.06, "erased word survived"
+
+    def test_whiteout_is_mixed_from_the_page(self, tmp_path):
+        png, ws = self.page(tmp_path)
+        box = render.column(ws)
+        assert render.page_background(png, box) == (237, 212, 188)
+
+    def test_the_same_seed_renders_the_same_page(self, tmp_path):
+        png, ws = self.page(tmp_path)
+        a = render.erase(png, ws, [0], tmp_path / "a.png", style="whiteout", seed=3)
+        b = render.erase(png, ws, [0], tmp_path / "b.png", style="whiteout", seed=3)
+        # `compare -metric AE` reports "N (normalised)"; the count is the first
+        # field.
+        differing = subprocess.run(
+            ["magick", "compare", "-metric", "AE", str(a), str(b), "null:"],
+            capture_output=True, text=True).stderr.strip().split()[0]
+        assert differing == "0", f"{differing} pixels differ between seeds"
