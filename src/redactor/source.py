@@ -122,8 +122,24 @@ def from_image(png: Path, min_conf: float = 55.0) -> list[Word]:
     out = proc.stdout
     if out.count("\n") < 2:
         raise RuntimeError(f"tesseract produced no rows for {png}: {proc.stderr[:200]}")
+    return words_from_tsv(out, min_conf)
+
+
+def words_from_tsv(tsv: str, min_conf: float = 55.0) -> list[Word]:
+    """Parse Tesseract's TSV into positioned words.
+
+    QUOTE_NONE carries more weight than it looks. The output is tab separated
+    and never quoted, but one of the words Tesseract read may itself begin
+    with a double quote, and the default CSV dialect reads that as the start
+    of a quoted field. It then consumes the tabs and newlines after it until
+    the next quote on the page, and every row in between is lost without an
+    error. A page that quotes anything loses the rest of itself: those words
+    are never offered to the poem, and the renderer never learns they are
+    there, so they are left standing on the finished page.
+    """
     words = []
-    for row in csv.DictReader(io.StringIO(out), delimiter="\t"):
+    for row in csv.DictReader(io.StringIO(tsv), delimiter="\t",
+                              quoting=csv.QUOTE_NONE, quotechar=None):
         text = (row.get("text") or "").strip()
         if not text or not normalize_ok(text):
             continue

@@ -2,6 +2,7 @@ import pytest
 
 from redactor.candidates import Candidate, Enumerator, is_subsequence
 from redactor.prosody import syllables
+from redactor import source
 from redactor.source import Word
 
 MOBY = """Call me Ishmael Some years ago never mind how long precisely having
@@ -208,3 +209,46 @@ class TestScansionEvidence:
     def test_content_words_ignores_function_words(self):
         from redactor.prosody import content_words
         assert content_words("the clock that tells the time".split()) == 3
+
+
+class TestTsvParsing:
+    """Tesseract's TSV is tab separated and unquoted, but the words in it are
+    whatever was on the page, double quotes included."""
+
+    HEADER = ("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\t"
+              "left\ttop\twidth\theight\tconf\ttext")
+
+    def tsv(self, *words):
+        rows = [self.HEADER]
+        for n, (text, top, conf) in enumerate(words, 1):
+            rows.append(f"5\t1\t1\t1\t1\t{n}\t{n * 50}\t{top}\t40\t12\t{conf}\t{text}")
+        return "\n".join(rows) + "\n"
+
+    def test_a_quoted_word_does_not_eat_the_rows_after_it(self):
+        """The bug this guards: the default CSV dialect treats a leading quote
+        as opening a quoted field and swallows every row up to the next one."""
+        got = source.words_from_tsv(self.tsv(
+            ("Call", 10, 96), ('"Did', 10, 95), ("you", 10, 94),
+            ("read", 10, 93), ('that"', 30, 92), ("afterward", 30, 91)))
+        assert [w.text for w in got] == ["Call", '"Did', "you", "read",
+                                         'that"', "afterward"]
+
+    def test_the_last_word_on_a_quoting_page_still_has_a_position(self):
+        got = source.words_from_tsv(self.tsv(
+            ('"Did', 10, 95), ("afterward", 1492, 91)))
+        assert max(w.top for w in got) == 1492
+
+    def test_an_unbalanced_quote_loses_nothing(self):
+        """Real pages open a quote that the screenshot cuts off before it
+        closes, which under the old dialect discarded the whole remainder."""
+        got = source.words_from_tsv(self.tsv(
+            ("opening", 10, 96), ('"unclosed', 10, 95), ("tail", 900, 94)))
+        assert len(got) == 3
+
+    def test_low_confidence_words_are_still_dropped(self):
+        got = source.words_from_tsv(self.tsv(("solid", 10, 96), ("junk", 10, 12)))
+        assert [w.text for w in got] == ["solid"]
+
+    def test_words_without_letters_are_still_dropped(self):
+        got = source.words_from_tsv(self.tsv(("real", 10, 96), ("--", 10, 96)))
+        assert [w.text for w in got] == ["real"]
