@@ -26,7 +26,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--connection", help="GitHub connector id")
     p.add_argument("-o", "--out", type=Path, default=Path("/tmp/redactor"))
     p.add_argument("--runs", type=int, default=2)
-    p.add_argument("--pos", action="store_true", help="enable part-of-speech pruning")
     p.add_argument("--no-llm", action="store_true")
     p.add_argument("--mode", default="whiteout", choices=["whiteout", "blackout"],
                    help="bars over what went (default) or a field with the poem showing")
@@ -59,7 +58,6 @@ def main(argv=None) -> int:
     for candidate in jobs:
         print(f"{kind}: {candidate.url}", file=sys.stderr)
         got = agent.erase_page(candidate.url, out=args.out, runs=args.runs,
-                               use_pos=args.pos,
                                section=getattr(candidate, "section", ""))
         if got is not None:
             job = candidate
@@ -101,12 +99,12 @@ def main(argv=None) -> int:
         print(f"{what}: {link}", file=sys.stderr)
 
     if kind == "request":
+        # Use the URL publish actually wrote, not one rebuilt from the folder
+        # name. A failed image upload otherwise sends the asker a broken image,
+        # and a failed page upload sends them a path with nothing in it.
         body = publish.page(url=url, poem=poem, form=rung.form, pool=rung.pool,
                             note=note, via=via,
-                            image_url=publish.raw_url(
-                                args.repo,
-                                written.get("folder", "").split("/tree/main/")[-1]
-                                + "/erasure.png"))
+                            image_url=written.get("image_raw"))
         agent.answer(conn, args.repo, job.number,
                      f"@{asker} here you go.\n\n{body}")
         print(f"answered #{job.number}", file=sys.stderr)

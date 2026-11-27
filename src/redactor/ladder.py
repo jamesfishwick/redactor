@@ -43,8 +43,7 @@ class Rung:
     candidates: list
 
 
-def climb(words, *, max_runs=2, pos_tags=None, trigrams=None,
-          want=1, limit=20000, sample=60, max_draws=40000,
+def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
           budget_s: float = 90.0, rng=None) -> Rung | None:
     """Return the hardest form this page admits, with candidates to choose from.
 
@@ -54,15 +53,16 @@ def climb(words, *, max_runs=2, pos_tags=None, trigrams=None,
     first 600 words alone; handing a ranker the first sixty of those gives it
     sixty poems from one corner of the page.
 
-    `budget_s` bounds the whole climb in wall-clock, because this runs on a
-    Sprite billed by the second. Rejection sampling for a metered form is where
-    the time goes: fewer than one draw in five hundred scans, so a long page
-    can spend minutes drawing. When the budget runs out the climb returns
-    whatever it has rather than nothing, and drops to an easier form if it has
-    nothing at all.
+    `budget_s` bounds each rung in wall-clock, because this runs on a Sprite
+    billed by the second. It is per rung rather than for the whole climb: one
+    deadline for all of them meant a hard form could spend the entire budget
+    and every easier one after it then entered already expired, drew nothing
+    and was skipped. The climb returned nothing at all on a page where a haiku
+    would have succeeded instantly, which is the opposite of dropping to an
+    easier form.
     """
-    deadline = time.monotonic() + budget_s
     for name in RUNGS:
+        deadline = time.monotonic() + budget_s
         meter = METERS.get(name)
         space = Space(words, FORMS[name], max_runs=max_runs, meter=meter)
         pool = space.count()
@@ -74,20 +74,24 @@ def climb(words, *, max_runs=2, pos_tags=None, trigrams=None,
         # a line offers any evidence that it scans: a line of ten monosyllables
         # matches any pattern. That is a property of the finished line, so it
         # filters the sample, which is small and costs nothing to walk again.
-        drawn, tries = [], 0
         patterns = meter.split("/") if meter else None
-        while (len(drawn) < sample and tries < max_draws
-               and time.monotonic() < deadline):
-            batch = space.sample(min(sample * 2, max_draws - tries), rng)
-            if not batch:
-                break
-            tries += len(batch)
-            if not patterns:
-                drawn += batch
-                continue
-            drawn += [c for c in batch
-                      if all(scans([words[i].text for i in line], pat)
-                             for line, pat in zip(c.lines, patterns))]
+        if not patterns:
+            # Every draw is usable, so there is nothing for a budget to bound.
+            # Gating this too meant a spent budget skipped the easy rungs as
+            # well, and the climb returned nothing from a page that would have
+            # given a haiku at once.
+            drawn = space.sample(sample, rng)
+        else:
+            drawn, tries = [], 0
+            while (len(drawn) < sample and tries < max_draws
+                   and time.monotonic() < deadline):
+                batch = space.sample(min(sample * 2, max_draws - tries), rng)
+                if not batch:
+                    break
+                tries += len(batch)
+                drawn += [c for c in batch
+                          if all(scans([words[i].text for i in line], pat)
+                                 for line, pat in zip(c.lines, patterns))]
         drawn = drawn[:sample]
         if len(drawn) >= want:
             return Rung(name, meter is not None, pool, drawn)
