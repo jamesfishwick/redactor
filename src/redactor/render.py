@@ -28,6 +28,15 @@ def _runs(indices: list[int], words) -> list[list[int]]:
     return out
 
 
+# The DOM reader labels a line by the element that holds it, so a line id
+# beginning with a tag name says the words were measured rather than read off
+# a picture. OCR labels lines by block and paragraph number instead.
+DOM_LINE_PREFIXES = tuple(f"{t}-" for t in (
+    "P", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "SPAN", "A", "DIV",
+    "EM", "STRONG", "B", "I", "BLOCKQUOTE", "TD", "TH", "FIGCAPTION",
+    "LABEL", "SMALL", "CODE", "PRE", "DD", "DT", "CAPTION"))
+
+
 def _bands(kept, words, slack: int = 2):
     """Horizontal strips of the page that hold a surviving word.
 
@@ -47,17 +56,30 @@ def _bands(kept, words, slack: int = 2):
     return merged
 
 
+def _height(png: Path, magick: str) -> int:
+    out = subprocess.run([magick, "identify", "-format", "%h", str(png)],
+                         capture_output=True, text=True, errors="replace")
+    try:
+        return int((out.stdout or "").strip().splitlines()[0])
+    except (AttributeError, ValueError, IndexError):
+        # Unknown height. The band clamp is a guard, not a requirement, so a
+        # render still proceeds without it rather than failing on the probe.
+        return 0
+
+
 def erase(png: Path, words, keep: list[int], dest: Path,
           pad: int = 2, margin: int = 16, mode: str = "whiteout",
           magick: str = "magick") -> Path:
     """Black out the region these words occupy, keeping only `keep`.
 
     Two modes. `whiteout` is the canonical form and the default: the page as
-    it was, with a bar over every word removed. It only became possible once
-    words came from the DOM, since drawing bars requires knowing where every
-    word is, and OCR silently missed some and left them legible. `blackout`
-    inverts it, blacking the field and letting the survivors show through,
-    which reads better when the poem is a few words in a long document.
+    it was, with a bar over every word removed. It is only honest when every
+    removed word is known, which means the words came from the DOM. OCR
+    reports only what it managed to read, so a word it missed gets no bar and
+    stays legible on a page that claims to be erased. `blackout` inverts it,
+    blacking the field and letting the survivors show through, which is safe
+    whatever the words came from and reads better when the poem is a few words
+    in a long document.
 
     The frame is the span of the surviving words, not of the whole page or
     even the whole section. Everything above the first and below the last is
@@ -76,6 +98,9 @@ def erase(png: Path, words, keep: list[int], dest: Path,
     kept = [words[i] for i in keep if words[i].placed]
     if not kept:
         raise ValueError("nothing to keep")
+    if mode == "whiteout" and not all(w.line.startswith(DOM_LINE_PREFIXES)
+                                      for w in placed):
+        mode = "blackout"
 
     x0 = max(0, min(w.left for w in placed) - margin)
     x1 = max(w.left + w.width for w in placed) + margin
@@ -83,9 +108,19 @@ def erase(png: Path, words, keep: list[int], dest: Path,
 
     work = dest.parent
     keepset = set(keep)
+    page_h = _height(png, magick)
     strips = []
     for n, (top, bottom) in enumerate(_bands(kept, words)):
+        # A band below the capture crops to a 1x1 image, which ImageMagick
+        # reports as success, so a whole line of the poem vanished from the
+        # render with nothing raised anywhere.
+        if page_h and top >= page_h:
+            raise ValueError(
+                f"a kept word sits at y={top}, below the {page_h}px capture")
+        bottom = min(bottom, page_h) if page_h else bottom
         h = bottom - top
+        if h <= 0:
+            continue
         strip = work / f"_strip{n}.png"
         on_strip = [i for i, w in enumerate(words)
                     if w.placed and top <= w.top < bottom]

@@ -246,13 +246,15 @@ class TestLongPages:
     def test_a_long_page_does_not_blow_the_stack(self):
         from redactor.candidates import Enumerator
         from redactor.source import Word
-        # longer than the default recursion limit, which the DOM reader can reach
+        # far past the default recursion limit, which the DOM reader reaches
         src = ("I thought I would sail about a little and see the watery "
-               "part of the world ") * 90
+               "part of the world ") * 400
         w = [Word(t, left=0, top=0, width=9, height=9, line="a")
              for t in src.split()]
-        assert len(w) > 1000
+        assert len(w) > 5000
+        # capped below Python's frame limit rather than overflowing it
         assert Enumerator(w, (5, 7, 5), max_runs=1, limit=20).all()
+        assert Enumerator(w, (5, 7, 5), max_runs=1).MAX_WORDS < 1000
 
 
 class TestSpace:
@@ -446,9 +448,9 @@ class TestTightCrop:
         calls = []
         monkeypatch.setattr(sp, "run", lambda *a, **k: calls.append(a[0]) or
                             sp.CompletedProcess(a[0], 0))
-        words = [Word("a", left=10, top=0, width=20, height=10, line="l"),
-                 Word("b", left=10, top=5000, width=20, height=10, line="m"),
-                 Word("c", left=10, top=9000, width=20, height=10, line="n")]
+        words = [Word("a", left=10, top=0, width=20, height=10, line="P-0"),
+                 Word("b", left=10, top=5000, width=20, height=10, line="P-5000"),
+                 Word("c", left=10, top=9000, width=20, height=10, line="P-9000")]
         render.erase(tmp_path / "p.png", words, [1], tmp_path / "out.png")
         crop = next(c[c.index("-crop") + 1] for c in calls if "-crop" in c)
         height = int(crop.split("x")[1].split("+")[0])
@@ -492,3 +494,58 @@ class TestSectionReachesTheReader:
         agent.erase_page("https://example.com", out=__import__("pathlib").Path("/tmp"),
                          section="§ 107")
         assert seen.get("section") == "§ 107"
+
+
+class TestWhiteoutGate:
+    def _words(self, line):
+        from redactor.source import Word
+        return [Word(t, left=i * 30, top=0, width=25, height=10, line=line)
+                for i, t in enumerate("alpha beta gamma delta".split())]
+
+    def _mode_used(self, words, monkeypatch, tmp_path):
+        import subprocess as sp
+        from redactor import render
+        calls = []
+        monkeypatch.setattr(sp, "run", lambda *a, **k: calls.append(a[0]) or
+                            sp.CompletedProcess(a[0], 0, stdout="400"))
+        render.erase(tmp_path / "p.png", words, [1], tmp_path / "o.png",
+                     mode="whiteout")
+        # blackout paints the whole strip, whiteout only bars what went
+        painted = [c for c in calls
+                   if "-draw" in c and any(d.startswith("rectangle 0,0") for d in c)]
+        return "blackout" if painted else "whiteout"
+
+    def test_dom_words_may_use_whiteout(self, monkeypatch, tmp_path):
+        assert self._mode_used(self._words("P-120"), monkeypatch, tmp_path) \
+               == "whiteout"
+
+    def test_ocr_words_fall_back_to_blackout(self, monkeypatch, tmp_path):
+        # OCR labels lines by block-paragraph-line, so a missed word would get
+        # no bar and stay legible under whiteout
+        assert self._mode_used(self._words("5-1-2"), monkeypatch, tmp_path) \
+               == "blackout"
+
+
+class TestBudgetFallthrough:
+    def _page(self):
+        from redactor.source import Word
+        src = ("I thought I would sail about a little and see the watery "
+               "part of the world ") * 12
+        return [Word(t, left=0, top=0, width=9, height=9, line=f"P-{i // 11}")
+                for i, t in enumerate(src.split())]
+
+    def test_a_spent_budget_still_reaches_an_easier_form(self):
+        from redactor import ladder
+        w = self._page()
+        assert ladder.climb(w, max_runs=2) is not None
+        # metered rungs get nothing, but a syllabic one needs no sampling budget
+        fallen = ladder.climb(w, max_runs=2, budget_s=0.0)
+        assert fallen is not None
+        assert fallen.metered is False
+
+    def test_the_budget_is_per_rung(self):
+        import inspect
+        from redactor import ladder
+        body = inspect.getsource(ladder.climb)
+        # the deadline is set inside the loop over rungs, not before it
+        assert body.index("for name in RUNGS") < body.index("deadline =")

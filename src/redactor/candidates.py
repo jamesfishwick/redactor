@@ -22,13 +22,8 @@ weaker proxy for the same thing.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from functools import lru_cache
-
-# One frame per word, and callers cap their input well below this. The margin
-# is for a page that slips through with an unusual word count.
-sys.setrecursionlimit(max(sys.getrecursionlimit(), 5000))
 
 from .prosody import METERS, scans, stress, syllables
 
@@ -61,8 +56,19 @@ class Enumerator:
     reading order and visual order mostly agreeing.
     """
 
+    # One recursion frame per word, so the cap has to sit under Python's own
+    # limit of 1000. Capped rather than raising that limit, which trades a
+    # clean error for a deeper C stack and would have to be raised for the
+    # whole process to serve one caller. `Space` has no such ceiling and is
+    # what the agent uses; this walk remains for comparing against it.
+    MAX_WORDS = 800
+
     def __init__(self, words, form, max_runs: int = 2, pos_tags=None,
                  allowed_trigrams=None, limit: int = 5000, meter: str | None = None):
+        if len(words) > self.MAX_WORDS:
+            words = words[:self.MAX_WORDS]
+            if pos_tags is not None:
+                pos_tags = pos_tags[:self.MAX_WORDS]
         self.w = words
         self.form = tuple(form)
         # Stress is a property of the assembled line, so it filters results
