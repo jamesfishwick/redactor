@@ -16,6 +16,9 @@ llm = ["anthropic>=0.40"]
 [project.scripts]
 redactor = "redactor.cli:main"
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
