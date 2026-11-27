@@ -8,7 +8,26 @@ Pointed at the Hacksgiving rules page, it produced this:
 as you want it to be. Your agent we
 ```
 
-Ten syllables, iambic, and a true subsequence of Fly's own copy. 1,268 erasures of that page scan as pentameter. A model picked this one and said it "turns the page's product instructions into a quiet ending where 'Your agent' turns into 'we,' as if the tool you shape to your wishes ends up being you."
+Ten syllables, iambic, and a true subsequence of Fly's own copy. 35,639 erasures of that page scan as pentameter. A model picked this one and said it "turns the page's product instructions into a quiet ending where 'Your agent' turns into 'we,' as if the tool you shape to your wishes ends up being you."
+
+## Two it found
+
+From [section 107 of the Copyright Act](https://www.copyright.gov/title17/92chap1.html), the fair use statute, which is the law deciding whether erasure poetry is legal at all. 184 words, 7,175 of whose erasures scan as pentameter:
+
+```
+commercial nature is unpublished shall
+```
+
+From [a tabletop blog arguing about how to end a session](https://theangrygm.com/ask-angry-journey-home/). 1,975 words of article, 68,713 ballads:
+
+```
+their daughter shit herself to death
+on the way home because
+the rations to the trek home as
+a grudging compromise.
+```
+
+Both are true subsequences of their page, in original order, with nothing added, and both were picked by a model from a sample of 120 drawn uniformly across the whole page.
 
 An erasure keeps some of a source and deletes the rest. Nothing is added, nothing is reordered, and what survives stays where it was on the page. `redactor` enumerates every erasure of a page that satisfies a given form, ranks them, and renders the winner as a redacted screenshot.
 
