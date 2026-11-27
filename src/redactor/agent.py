@@ -41,13 +41,20 @@ class Request:
 
 def open_requests(connection: str, repo: str) -> list[Request]:
     """Issues asking for a page, oldest first so nobody is starved."""
-    issues = publish._call(connection, f"repos/{repo}/issues?state=open&per_page=30")
+    # Oldest first from the server. The default is newest first, so sorting
+    # one page of results ordered that page and not the queue: past thirty
+    # open issues the genuinely oldest requests were never in the response.
+    issues = publish._call(
+        connection,
+        f"repos/{repo}/issues?state=open&per_page=30&sort=created&direction=asc")
     out: list[Request] = []
     for issue in issues or []:
         if "pull_request" in issue:
             continue
         found = URL_IN_TITLE.search(issue.get("title") or "")
         if not found:
+            continue
+        if any(l.get("name") == DECLINED for l in issue.get("labels") or []):
             continue
         title = issue.get("title") or ""
         named = SECTION_IN_TITLE.search(title)
@@ -60,10 +67,11 @@ def open_requests(connection: str, repo: str) -> list[Request]:
 def already_erased(connection: str, repo: str) -> set[str]:
     """Source URLs the gallery already records, so idle mode never repeats."""
     page = publish._call(connection, f"repos/{repo}/contents/GALLERY.md")
-    if not page or not page.get("content"):
-        return set()
-    import base64
-    body = base64.b64decode(page["content"]).decode("utf-8", "replace")
+    body = publish._inline_text(page)
+    if body is None:
+        # Too large to inline. An empty set here would mean re-erasing every
+        # page already done, so say so rather than quietly repeating work.
+        raise RuntimeError("GALLERY.md is too large to read inline")
     return set(re.findall(r"from <(https?://[^>]+)>", body))
 
 
@@ -78,16 +86,26 @@ def answer(connection: str, repo: str, number: int, body: str,
     return (out or {}).get("html_url")
 
 
-def decline(connection: str, repo: str, number: int, why: str) -> None:
-    """Say why a page yielded nothing, and leave the issue open.
+DECLINED = "declined"
 
-    A page that is too short or behind a paywall is not the asker's mistake and
-    not a failure to hide. Closing it silently would make the agent look broken
-    rather than honest.
+
+def decline(connection: str, repo: str, number: int, why: str) -> None:
+    """Say why a page yielded nothing, and stop picking it up.
+
+    The issue stays open, because a page too short or behind a paywall is not
+    the asker's mistake and closing it silently would make the agent look
+    broken rather than honest. It gets a label instead.
+
+    Without one it is picked up forever: requests are served lowest number
+    first, so a single page that cannot be read starves every later request
+    and all idle work, and posts the same comment on every cycle.
     """
     answer(connection, repo, number,
            f"Could not erase that page. {why}\n\n"
-           f"Leaving this open in case the page changes.", close=False)
+           f"Leaving this open in case the page changes. Remove the "
+           f"`{DECLINED}` label to have it tried again.", close=False)
+    publish._call(connection, f"repos/{repo}/issues/{number}/labels",
+                  "POST", {"labels": [DECLINED]})
 
 
 def next_job(connection: str, repo: str,
@@ -118,7 +136,7 @@ MIN_WORDS = 120     # below this a page yields a pool too small to choose from
 SHOT = (1100, 5000)
 
 
-def erase_page(url: str, *, out: Path, runs: int = 2, use_pos: bool = False,
+def erase_page(url: str, *, out: Path, runs: int = 2,
                shot_size: tuple[int, int] = SHOT, section: str = ""):
     """Read the page, enumerate its erasures. Returns (words, rung, shot) or None.
 
@@ -127,7 +145,7 @@ def erase_page(url: str, *, out: Path, runs: int = 2, use_pos: bool = False,
     footer; OCR guesses at both. OCR stays for the case the DOM cannot answer,
     such as a page that is an image of text.
     """
-    from . import dom, ladder, source, tagging
+    from . import dom, ladder, source
 
     shot_path = out / "page.png"
     words = None
@@ -163,14 +181,9 @@ def erase_page(url: str, *, out: Path, runs: int = 2, use_pos: bool = False,
     if words is None or len(words) < MIN_WORDS:
         return None
 
-    tags = tri = None
-    if use_pos:
-        nlp = tagging.load()
-        if nlp is not None:
-            tags = tagging.tag(nlp, words)
-            tri = tagging.trigrams(nlp, " ".join(w.text for w in words))
-
-    rung = ladder.climb(words, max_runs=runs, pos_tags=tags, trigrams=tri)
+    # Part-of-speech pruning is not wired into the sampler, so tagging here
+    # would load spaCy and change nothing. Contiguity carries the grammar.
+    rung = ladder.climb(words, max_runs=runs)
     if rung is None:
         return None
     return words, rung, shot
