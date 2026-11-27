@@ -105,7 +105,7 @@ def _runnable(exe: str) -> bool:
 
 
 MIN_CONF = 55.0
-"""Confidence below which a reported word is treated as noise rather than text."""
+"""Confidence below which a reported word is treated as noise, not text."""
 
 
 def from_image(png: Path, min_conf: float = MIN_CONF) -> list[Word]:
@@ -137,29 +137,20 @@ def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:
     erasure can both use and cover.
 
     Tesseract never quotes its fields, but the words inside them are whatever
-    was on the page. Under the default dialect a field that *begins* with a
-    double quote opens a quoted field, and the reader then runs past tabs and
-    newlines to the next unescaped double quote anywhere in the stream, or to
-    the end of input if none follows. The two halves are not symmetric: opening takes a
-    quote at the start of a field, while closing takes one anywhere at all,
-    including inside a later token or at its end.
+    was on the page. Under the default dialect a field beginning with a double
+    quote opens a quoted field, and the rows after it are swallowed into that
+    field until a closing quote or the end of input. They are not dropped. They
+    arrive as one Word holding a blob of raw TSV at the opening word's
+    position, and the words they contained never arrive at all.
 
-    The rows it runs past are not dropped. They are absorbed into the text of
-    the row that opened the quote, which passes every filter below and becomes
-    one Word holding a blob of raw TSV at the opening word's position. Past
-    `csv.field_size_limit()` the reader raises instead of absorbing.
+    That matters downstream, since `render.erase` sizes its cover from the
+    words it is handed, so anything past the last survivor stays legible on the
+    finished page.
 
-    When the rows are absorbed, the real words stop arriving here. `render.erase`
-    sizes its cover from the words it is handed, so anything past the last
-    surviving word falls outside that cover and stays legible on the finished
-    page. When the limit is hit instead, the reader raises and no page is
-    produced at all, which is the louder and safer of the two.
-
-    QUOTE_NONE is what turns the special case off. quotechar=None is set with
-    it as a tripwire: drop the QUOTE_NONE and DictReader raises TypeError at
-    construction, where dropping the quotechar on its own would re-enable
-    quoting in silence. On a bare csv.reader quotechar=None is enough by
-    itself, which is why the pair looks redundant and is not.
+    QUOTE_NONE is what prevents it. quotechar=None changes nothing while
+    QUOTE_NONE is there, and is set as a tripwire: remove QUOTE_NONE and
+    DictReader raises at construction, where it would otherwise go on parsing
+    with quoting restored.
     """
     words = []
     for row in csv.DictReader(io.StringIO(tsv), delimiter="\t",

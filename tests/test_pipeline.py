@@ -251,7 +251,8 @@ class TestTsvParsing:
 
     def test_an_unbalanced_quote_loses_nothing(self):
         """Real pages open a quote that the screenshot cuts off before it
-        closes, which under the old dialect discarded the whole remainder."""
+        closes. Under the old dialect the remainder was swallowed into the
+        opening row, which kept that row's position and lost every other."""
         got = source.words_from_tsv(self.tsv(
             ("opening", 10, 96), ('"unclosed', 10, 95), ("tail", 900, 94)))
         assert [w.text for w in got] == ["opening", '"unclosed', "tail"]
@@ -289,9 +290,8 @@ class TestTsvParsing:
         """Every real page carries these. Tesseract emits one row per page,
         block, paragraph and line alongside the word rows, each with an empty
         text column and a confidence of -1. This asserts they never reach the
-        word list, and that their zeroed geometry survives the int() calls.
-        Three separate guards drop them, so it pins the outcome and not any
-        one branch."""
+        word list. Three separate guards drop them, so it pins the outcome and
+        not any one branch."""
         rows = [self.HEADER,
                 "1\t1\t0\t0\t0\t0\t0\t0\t1000\t1500\t-1\t",
                 "4\t1\t1\t1\t1\t0\t50\t10\t200\t12\t-1\t",
@@ -300,7 +300,8 @@ class TestTsvParsing:
         assert [w.text for w in got] == ["survivor"]
 
     def test_low_confidence_words_are_still_dropped(self):
-        got = source.words_from_tsv(self.tsv(("solid", 10, 96), ("junk", 10, 12)))
+        got = source.words_from_tsv(
+            self.tsv(("solid", 10, 96), ("junk", 10, 12)))
         assert [w.text for w in got] == ["solid"]
 
     def test_words_without_letters_are_still_dropped(self):
