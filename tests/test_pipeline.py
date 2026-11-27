@@ -288,8 +288,10 @@ class TestTsvParsing:
     def test_hierarchy_rows_are_dropped(self):
         """Every real page carries these. Tesseract emits one row per page,
         block, paragraph and line alongside the word rows, each with an empty
-        text column and a confidence of -1, so the empty-text branch runs on
-        input the fixture's word rows never produce."""
+        text column and a confidence of -1. This asserts they never reach the
+        word list, and that their zeroed geometry survives the int() calls.
+        Three separate guards drop them, so it pins the outcome and not any
+        one branch."""
         rows = [self.HEADER,
                 "1\t1\t0\t0\t0\t0\t0\t0\t1000\t1500\t-1\t",
                 "4\t1\t1\t1\t1\t0\t50\t10\t200\t12\t-1\t",

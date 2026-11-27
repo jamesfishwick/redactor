@@ -111,8 +111,9 @@ MIN_CONF = 55.0
 def from_image(png: Path, min_conf: float = MIN_CONF) -> list[Word]:
     """OCR the rendered page into positioned words.
 
-    A malformed stream raises out of the parse and is not caught here, so a
-    caller wanting a page to degrade rather than abort has to catch it.
+    Parse errors propagate out of this function and nothing here catches them.
+    A row short of its columns does not raise at all, it is dropped on the
+    empty text check, so a short page and a truncated stream look alike.
     """
     # Tesseract exits non-zero on Leptonica warnings it has already recovered
     # from, so the exit code says nothing about whether the TSV is usable.
@@ -138,8 +139,8 @@ def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:
     Tesseract never quotes its fields, but the words inside them are whatever
     was on the page. Under the default dialect a field that *begins* with a
     double quote opens a quoted field, and the reader then runs past tabs and
-    newlines to the next double quote anywhere in the stream, or to the end of
-    input if none follows. The two halves are not symmetric: opening takes a
+    newlines to the next unescaped double quote anywhere in the stream, or to
+    the end of input if none follows. The two halves are not symmetric: opening takes a
     quote at the start of a field, while closing takes one anywhere at all,
     including inside a later token or at its end.
 
@@ -154,10 +155,11 @@ def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:
     page. When the limit is hit instead, the reader raises and no page is
     produced at all, which is the louder and safer of the two.
 
-    QUOTE_NONE is what turns the special case off, and either setting alone
-    would do it. quotechar=None is set with it because dropping QUOTE_NONE
-    then raises TypeError at construction, where dropping it on its own would
-    re-enable quoting silently.
+    QUOTE_NONE is what turns the special case off. quotechar=None is set with
+    it as a tripwire: drop the QUOTE_NONE and DictReader raises TypeError at
+    construction, where dropping the quotechar on its own would re-enable
+    quoting in silence. On a bare csv.reader quotechar=None is enough by
+    itself, which is why the pair looks redundant and is not.
     """
     words = []
     for row in csv.DictReader(io.StringIO(tsv), delimiter="\t",
