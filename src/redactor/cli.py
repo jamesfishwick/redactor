@@ -24,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-r", "--runs", type=int, default=2,
                    help="maximum contiguous spans of kept words (default 2)")
     p.add_argument("-o", "--out", type=Path, default=Path("out"))
+    p.add_argument("--style", default="whiteout", choices=sorted(render.STYLES),
+                   help="how the erased words are covered: 'whiteout' brushes "
+                        "correction fluid mixed from the page's own background, "
+                        "'black' lays an opaque bar")
+    p.add_argument("--fluid", metavar="COLOR",
+                   help="override the whiteout color (any ImageMagick color, "
+                        "e.g. '#f5f3f1'); by default it is mixed from the page")
     p.add_argument("--no-image", action="store_true",
                    help="read the page as text; skip screenshot and rendering")
     p.add_argument("--no-pos", action="store_true", help="skip part-of-speech pruning")
@@ -68,7 +75,9 @@ def main(argv=None) -> int:
         for i in keep:
             print(words[i].text)
         if shot is not None:
-            dest = render.erase(shot, words, keep, args.out / "erasure.png")
+            dest = render.erase(shot, words, keep, args.out / "erasure.png",
+                                style=args.style, seed=args.seed,
+                                color=args.fluid)
             print(f"\nwrote {dest}", file=sys.stderr)
         return 0
 
@@ -98,7 +107,9 @@ def main(argv=None) -> int:
             for i in keep:
                 print(words[i].text)
             if shot is not None:
-                dest = render.erase(shot, words, keep, args.out / "erasure.png")
+                dest = render.erase(shot, words, keep, args.out / "erasure.png",
+                                    style=args.style, seed=args.seed,
+                                    color=args.fluid)
                 print(f"\nwrote {dest}", file=sys.stderr)
             return 0
         found = rung.candidates
@@ -123,7 +134,9 @@ def main(argv=None) -> int:
         print(compare.report(attempts, words))
         best = next((a.poem for a in reversed(attempts) if a.poem), None)
         if shot is not None and best is not None:
-            dest = render.erase(shot, words, best.indices(), args.out / "erasure.png")
+            dest = render.erase(shot, words, best.indices(),
+                                args.out / "erasure.png", style=args.style,
+                                seed=args.seed, color=args.fluid)
             print(f"\nwrote {dest}", file=sys.stderr)
         return 0
 
@@ -146,7 +159,9 @@ def main(argv=None) -> int:
 
     dest = None
     if shot is not None:
-        dest = render.erase(shot, words, chosen.indices(), args.out / "erasure.png")
+        dest = render.erase(shot, words, chosen.indices(),
+                            args.out / "erasure.png", style=args.style,
+                            seed=args.seed, color=args.fluid)
         print(f"\nwrote {dest}", file=sys.stderr)
 
     if args.publish:
