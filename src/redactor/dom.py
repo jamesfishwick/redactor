@@ -24,8 +24,22 @@ from dataclasses import dataclass
 # markup: text hidden by CSS is skipped because its box has no size.
 EXTRACT = r"""() => {
   const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','SVG','HEAD','TEXTAREA']);
-  const CHROME = 'nav,header,footer,aside,form,[role=navigation],' +
-                 '[role=banner],[role=contentinfo],[role=search]';
+  // Consent dialogs, newsletter overlays and cookie bars are ordinary divs,
+  // so the landmark elements alone do not catch them. They read as body text
+  // and then turn up in the poem: one page erased down to its own cookie
+  // banner, which is the page's lawyers rather than the page.
+  const CHROME = [
+    'nav', 'header', 'footer', 'aside', 'form',
+    '[role=navigation]', '[role=banner]', '[role=contentinfo]',
+    '[role=search]', '[role=dialog]', '[role=alertdialog]',
+    '[aria-modal=true]', 'dialog',
+    '[id*=cookie i]', '[class*=cookie i]',
+    '[id*=consent i]', '[class*=consent i]',
+    '[id*=gdpr i]', '[class*=gdpr i]',
+    '[class*=newsletter i]', '[class*=subscribe i]',
+    '[class*=paywall i]', '[class*=modal i]', '[class*=popup i]',
+    '[class*=banner i]', '[class*=notice i]',
+  ].join(',');
   const out = [];
   const HEADING = new Set(['H1','H2','H3','H4','H5','H6']);
   let section = 0;
@@ -101,8 +115,32 @@ class Read:
     sections: list     # heading index per word, parallel to `words`
 
 
+MAX_CAPTURE = 30000   # ImageMagick refuses an image taller than 32,000px
+
+# A site that declines automated access still answers with a page, and that
+# page has words on it. One of them was published as an erasure of a Pulitzer
+# finalist, having actually been made from the interstitial. A challenge is not
+# a short page to be skipped for thinness, it is the wrong page entirely.
+CHALLENGE = (
+    "performing security verification",
+    "checking your browser",
+    "enable javascript and cookies",
+    "verify you are human",
+    "just a moment",
+    "access denied",
+    "request blocked",
+    "unusual traffic",
+    "are you a robot",
+)
+
+
+def is_challenge(words) -> bool:
+    text = " ".join(getattr(w, "text", w) for w in words[:80]).lower()
+    return any(phrase in text for phrase in CHALLENGE)
+
+
 def read(url: str, png, *, width: int = 1100, height: int = 1400,
-         timeout: int = 45000, settle: int = 2500,
+         timeout: int = 45000, settle: int = 2500, section: str = "",
          body_only: bool = True) -> Read | None:
     """Screenshot the page and return its words with exact boxes.
 
@@ -114,6 +152,11 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
     `networkidle`. An ad-heavy page keeps connections open indefinitely, so
     networkidle never fires and the read times out on a page that rendered
     fine seconds earlier. The settle covers content that arrives late.
+
+    The capture is clipped to the words that will actually be used, chosen
+    before the browser closes. A whole statute rendered full-page is 103,102
+    pixels tall and no image tool will open it, and the rest of it is not the
+    poem's page in any case.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -130,18 +173,24 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
             page.wait_for_timeout(settle)
             raw = page.evaluate(EXTRACT)
             title = page.title()
-            page.screenshot(path=str(png), full_page=True)
+            kept = _choose(raw, body_only, section)
+            if not kept or is_challenge([w["t"] for w in kept]):
+                browser.close()
+                return None
+            clip = _clip(kept, width)
+            page.screenshot(path=str(png), full_page=True, clip=clip)
         except Exception:
             browser.close()
             return None
         browser.close()
 
     words, sections = [], []
-    for w in raw:
-        if body_only and w["chrome"]:
-            continue
+    for w in kept:
         words.append(Word(
-            text=w["t"], left=w["x"], top=w["y"],
+            text=w["t"],
+            # Boxes are reported against the page, the capture starts at the
+            # clip, so positions move with it.
+            left=w["x"] - clip["x"], top=w["y"] - clip["y"],
             width=w["w"], height=w["h"],
             # Words share a line when they share a parent element and a
             # baseline, which is what a visual run has to respect.
@@ -149,6 +198,88 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
         ))
         sections.append(w.get("sec", 0))
     return Read(words, str(png), title, sections) if words else None
+
+
+def _choose(raw, body_only: bool, section: str):
+    """The words to work with, decided before the browser closes."""
+    pool = [w for w in raw if not (body_only and w["chrome"])]
+    if not pool:
+        return []
+    if section:
+        named = _named_raw(pool, section)
+        if named:
+            return named
+    return _largest_raw(pool)
+
+
+def _named_raw(pool, start: str):
+    import re as _re
+    want = _re.sub(r"\s+", " ", start).strip().lower()
+    joined, offsets = "", []
+    for i, w in enumerate(pool):
+        offsets.append((len(joined), i))
+        joined += _re.sub(r"\s+", " ", w["t"]).strip().lower() + " "
+    at = joined.find(want)
+    if at < 0:
+        return []
+    begin = next((i for off, i in offsets if off >= at), 0)
+    seen, end = [], begin
+    while end < len(pool):
+        sec = pool[end].get("sec", 0)
+        if sec not in seen:
+            if len(seen) == 2:
+                break
+            seen.append(sec)
+        end += 1
+    return pool[begin:end]
+
+
+def _largest_raw(pool, floor: int = 150):
+    if len(pool) < floor * 2:
+        return pool
+    runs: dict[int, list] = {}
+    for w in pool:
+        runs.setdefault(w.get("sec", 0), []).append(w)
+    best = max(runs.values(), key=len)
+    return best if len(best) >= floor else pool
+
+
+def _clip(kept, width: int) -> dict:
+    top = max(0, min(w["y"] for w in kept) - 60)
+    bottom = max(w["y"] + w["h"] for w in kept) + 60
+    return {"x": 0, "y": top, "width": width,
+            "height": min(bottom - top, MAX_CAPTURE)}
+
+
+def named_section(read: "Read", start: str, cap: int = 4000):
+    """The part of a page that begins at `start` and ends where it does.
+
+    `slice_between` with no end marker runs to the end of the document, which
+    on a page holding a whole statute is tens of thousands of words: asking for
+    section 107 that way returns everything after it. The heading index already
+    records where each part stops, so the end comes from the page's own
+    structure rather than from a second marker the asker has to supply.
+    """
+    chosen = slice_between(read.words, start)
+    if not chosen:
+        return []
+    begin = len(read.words) - len(chosen)
+    if read.sections:
+        # A heading is its own element, so it gets its own index and the body
+        # it introduces gets the next one. Stopping at the first change
+        # therefore returns the heading alone: on section 107 that was eight
+        # words, the title and nothing under it. Run on until a third index
+        # appears, which is the following heading.
+        seen, end = [], begin
+        while end < len(read.words):
+            sec = read.sections[end]
+            if sec not in seen:
+                if len(seen) == 2:
+                    break
+                seen.append(sec)
+            end += 1
+        chosen = read.words[begin:end]
+    return chosen[:cap]
 
 
 def largest_section(read: "Read", floor: int = 150):
