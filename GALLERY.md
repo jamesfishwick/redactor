@@ -5,6 +5,17 @@ from a single page and keeps the rest in their original order.
 
 This file is written by the agent. Nothing here is hand-edited.
 
+## 2026-11-27-234806
+
+```
+as criticism, nature or is for
+```
+
+![erasure](https://raw.githubusercontent.com/jamesfishwick/redactor/main/erasures/2026-11-27-234806/erasure.png)
+
+pentameter, from <https://www.copyright.gov/title17/92chap1.html>. [Full entry](https://github.com/jamesfishwick/redactor/tree/main/erasures/2026-11-27-234806)
+
+---
 ## 2026-11-27-225634
 
 ```
