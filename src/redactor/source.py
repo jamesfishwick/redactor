@@ -104,12 +104,15 @@ def _runnable(exe: str) -> bool:
     return "snap" not in (probe.stdout + probe.stderr).lower()
 
 
-def from_image(png: Path, min_conf: float = 55.0) -> list[Word]:
+MIN_CONF = 55.0
+"""Confidence below which a reported word is treated as noise rather than text."""
+
+
+def from_image(png: Path, min_conf: float = MIN_CONF) -> list[Word]:
     """OCR the rendered page into positioned words.
 
-    Confidence filtering is not cosmetic. Below it, Tesseract reports text in
-    illustrations and UI glyphs, and anything it fails to report survives the
-    redaction as a stray mark.
+    The exit code is deliberately not consulted, so the output is judged by
+    whether rows came back. See the comment below.
     """
     # Tesseract exits non-zero on Leptonica warnings it has already recovered
     # from, so the exit code says nothing about whether the TSV is usable.
@@ -125,17 +128,31 @@ def from_image(png: Path, min_conf: float = 55.0) -> list[Word]:
     return words_from_tsv(out, min_conf)
 
 
-def words_from_tsv(tsv: str, min_conf: float = 55.0) -> list[Word]:
+def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:
     """Parse Tesseract's TSV into positioned words.
 
-    QUOTE_NONE carries more weight than it looks. The output is tab separated
-    and never quoted, but one of the words Tesseract read may itself begin
-    with a double quote, and the default CSV dialect reads that as the start
-    of a quoted field. It then consumes the tabs and newlines after it until
-    the next quote on the page, and every row in between is lost without an
-    error. A page that quotes anything loses the rest of itself: those words
-    are never offered to the poem, and the renderer never learns they are
-    there, so they are left standing on the finished page.
+    Confidence filtering is not cosmetic. Below `min_conf`, Tesseract reports
+    text in illustrations and UI glyphs, and a word it reports is a word the
+    erasure can both use and cover.
+
+    Tesseract never quotes its fields, but the words inside them are whatever
+    was on the page. Under the default dialect a field that *begins* with a
+    double quote opens a quoted field, and the reader then runs past tabs and
+    newlines to the next field-opening quote in the stream, or to the end of
+    input if nothing closes it. A quote in the middle of a token, or at its
+    end, opens nothing.
+
+    The rows it runs past are not dropped. They are absorbed into the text of
+    the row that opened the quote, which passes every filter below and becomes
+    one Word holding a blob of raw TSV at the opening word's position. Past
+    `csv.field_size_limit()` the reader raises instead of absorbing.
+
+    Either way the real words stop arriving here, and `render.erase` sizes its
+    cover from the words it is handed, so anything past the last surviving
+    word falls outside that cover and stays legible on the finished page.
+
+    QUOTE_NONE is what turns the special case off. quotechar=None is set with
+    it so that restoring a quotechar alone cannot quietly re-enable quoting.
     """
     words = []
     for row in csv.DictReader(io.StringIO(tsv), delimiter="\t",

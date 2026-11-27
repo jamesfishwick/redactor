@@ -219,9 +219,14 @@ class TestTsvParsing:
               "left\ttop\twidth\theight\tconf\ttext")
 
     def tsv(self, *words):
+        """Rows in Tesseract's shape. A word may carry its own line key, since
+        that key is what render groups adjacent kept words by."""
         rows = [self.HEADER]
-        for n, (text, top, conf) in enumerate(words, 1):
-            rows.append(f"5\t1\t1\t1\t1\t{n}\t{n * 50}\t{top}\t40\t12\t{conf}\t{text}")
+        for n, word in enumerate(words, 1):
+            text, top, conf = word[:3]
+            block, par, line = word[3] if len(word) > 3 else (1, 1, 1)
+            rows.append(f"5\t1\t{block}\t{par}\t{line}\t{n}\t"
+                        f"{n * 50}\t{top}\t40\t12\t{conf}\t{text}")
         return "\n".join(rows) + "\n"
 
     def test_a_quoted_word_does_not_eat_the_rows_after_it(self):
@@ -234,16 +239,47 @@ class TestTsvParsing:
                                          'that"', "afterward"]
 
     def test_the_last_word_on_a_quoting_page_still_has_a_position(self):
+        """render.erase sizes its cover from the words it is handed, so losing
+        the last one shrinks the cover and leaves real text legible below it.
+        The position matters as much as the word."""
         got = source.words_from_tsv(self.tsv(
             ('"Did', 10, 95), ("afterward", 1492, 91)))
-        assert max(w.top for w in got) == 1492
+        assert [w.text for w in got] == ['"Did', "afterward"]
+        assert max((w.top for w in got), default=None) == 1492
 
     def test_an_unbalanced_quote_loses_nothing(self):
         """Real pages open a quote that the screenshot cuts off before it
         closes, which under the old dialect discarded the whole remainder."""
         got = source.words_from_tsv(self.tsv(
             ("opening", 10, 96), ('"unclosed', 10, 95), ("tail", 900, 94)))
-        assert len(got) == 3
+        assert [w.text for w in got] == ["opening", '"unclosed', "tail"]
+
+    def test_a_balanced_quote_keeps_its_quotes(self):
+        """The axis an ordinary page actually hits. A word quoted at both ends
+        is a well formed quoted field, so the old dialect lost no row and no
+        position, and returned the word with its quotes stripped off. Nothing
+        that counts rows or checks positions can see that."""
+        got = source.words_from_tsv(self.tsv(
+            ("he", 10, 96), ('"work"', 10, 95), ('hard."', 10, 94),
+            ("ended", 10, 93)))
+        assert [w.text for w in got] == ["he", '"work"', 'hard."', "ended"]
+
+    def test_a_lone_quote_word_does_not_absorb_its_neighbours(self):
+        """Tesseract segments an opening quote as its own token. Under the old
+        dialect that token absorbed the rows after it and came back as a Word
+        whose text was raw TSV, carrying the quote glyph's own small box."""
+        got = source.words_from_tsv(self.tsv(
+            ("alpha", 10, 96), ('"', 10, 95), ("beta", 10, 94),
+            ("gamma", 10, 93)))
+        assert [w.text for w in got] == ["alpha", "beta", "gamma"]
+
+    def test_the_line_key_follows_the_row(self):
+        """render groups adjacent kept words into one restored run by this key,
+        so a reordering of it merges runs across a line break on the page."""
+        got = source.words_from_tsv(self.tsv(
+            ("first", 10, 96, (1, 1, 1)), ("same", 10, 95, (1, 1, 1)),
+            ("other", 30, 94, (2, 3, 4))))
+        assert [w.line for w in got] == ["1-1-1", "1-1-1", "2-3-4"]
 
     def test_low_confidence_words_are_still_dropped(self):
         got = source.words_from_tsv(self.tsv(("solid", 10, 96), ("junk", 10, 12)))
