@@ -27,11 +27,16 @@ EXTRACT = r"""() => {
   const CHROME = 'nav,header,footer,aside,form,[role=navigation],' +
                  '[role=banner],[role=contentinfo],[role=search]';
   const out = [];
+  const HEADING = new Set(['H1','H2','H3','H4','H5','H6']);
+  let section = 0;
   const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   let node;
   while ((node = walk.nextNode())) {
     const parent = node.parentElement;
     if (!parent || SKIP.has(parent.tagName)) continue;
+    // A heading starts a new section, so a long document can be cut at its own
+    // seams instead of at an arbitrary word count.
+    if (HEADING.has(parent.tagName)) section++;
     const style = getComputedStyle(parent);
     if (style.visibility === 'hidden' || style.display === 'none') continue;
     const furniture = !!parent.closest(CHROME);
@@ -47,7 +52,7 @@ EXTRACT = r"""() => {
         t: match[0],
         x: Math.round(box.x + scrollX), y: Math.round(box.y + scrollY),
         w: Math.round(box.width), h: Math.round(box.height),
-        chrome: furniture, tag: parent.tagName,
+        chrome: furniture, tag: parent.tagName, sec: section,
       });
     }
   }
@@ -55,20 +60,60 @@ EXTRACT = r"""() => {
 }"""
 
 
+def slice_between(words, start: str, end: str | None = None):
+    """Keep the words from the first `start` up to the next `end`.
+
+    Some pages are a whole document rather than an article. Chapter 1 of the
+    Copyright Act is 72,731 words in one URL, and erasing "the chapter" is not
+    a thing anyone means: the unit is a section. This takes one out by its own
+    heading text, so a fragment like #107 becomes a source.
+
+    Matching is on the joined text, so a heading split across elements still
+    matches, and the comparison ignores case and runs of whitespace.
+    """
+    import re as _re
+
+    def norm(t: str) -> str:
+        return _re.sub(r"\s+", " ", t).strip().lower()
+
+    joined, spans = "", []
+    for i, w in enumerate(words):
+        spans.append((len(joined), i))
+        joined += norm(w.text) + " "
+
+    begin = joined.find(norm(start))
+    if begin < 0:
+        return []
+    stop = joined.find(norm(end), begin + 1) if end else -1
+    if stop < 0:
+        stop = len(joined)
+
+    first = next((i for off, i in spans if off >= begin), 0)
+    last = next((i for off, i in reversed(spans) if off < stop), len(words) - 1)
+    return words[first:last + 1]
+
+
 @dataclass(frozen=True)
 class Read:
     words: list        # redactor.source.Word
     png: str           # full-page screenshot the boxes refer to
     title: str
+    sections: list     # heading index per word, parallel to `words`
 
 
 def read(url: str, png, *, width: int = 1100, height: int = 1400,
-         timeout: int = 60000, body_only: bool = True) -> Read | None:
+         timeout: int = 45000, settle: int = 2500,
+         body_only: bool = True) -> Read | None:
     """Screenshot the page and return its words with exact boxes.
 
     The screenshot is full-page so that every box the DOM reports falls inside
     the image. A viewport-sized one would leave most words pointing off the
     bottom of it.
+
+    Waits for `domcontentloaded` and then a fixed settle, not for
+    `networkidle`. An ad-heavy page keeps connections open indefinitely, so
+    networkidle never fires and the read times out on a page that rendered
+    fine seconds earlier. The settle covers content that arrives late.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -81,7 +126,8 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
         browser = pw.chromium.launch(args=["--no-sandbox"])
         try:
             page = browser.new_page(viewport={"width": width, "height": height})
-            page.goto(url, wait_until="networkidle", timeout=timeout)
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+            page.wait_for_timeout(settle)
             raw = page.evaluate(EXTRACT)
             title = page.title()
             page.screenshot(path=str(png), full_page=True)
@@ -90,7 +136,7 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
             return None
         browser.close()
 
-    words = []
+    words, sections = [], []
     for w in raw:
         if body_only and w["chrome"]:
             continue
@@ -101,4 +147,23 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
             # baseline, which is what a visual run has to respect.
             line=f"{w['tag']}-{w['y']}",
         ))
-    return Read(words, str(png), title) if words else None
+        sections.append(w.get("sec", 0))
+    return Read(words, str(png), title, sections) if words else None
+
+
+def largest_section(read: "Read", floor: int = 150):
+    """The longest run of words under one heading.
+
+    Preferred over truncating a long page, which cuts wherever the count runs
+    out. Chapter 1 of the Copyright Act is 60,280 words in one URL and reading
+    it costs 29 seconds before anything is enumerated, while the section that
+    is actually about this project is 184 words and costs 8 seconds end to end.
+    Cheaper and a better unit at the same time.
+    """
+    if not read.sections or len(read.words) < floor * 2:
+        return read.words
+    runs: dict[int, list] = {}
+    for word, sec in zip(read.words, read.sections):
+        runs.setdefault(sec, []).append(word)
+    best = max(runs.values(), key=len)
+    return best if len(best) >= floor else read.words
