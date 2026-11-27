@@ -20,9 +20,15 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+import sys
+
 from . import publish, sources
 
 URL_IN_TITLE = re.compile(r"erase:\s*(https?://\S+)", re.I)
+# `erase: <url> section: § 107` asks for one part of a long document. Without
+# it a long page is reduced to its longest section, which on Title 17 chapter 1
+# is 17,754 words of royalty provisions rather than the 184 about fair use.
+SECTION_IN_TITLE = re.compile(r"section:\s*(.+?)\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,7 @@ class Request:
     number: int
     url: str
     asker: str
+    section: str = ""
 
 
 def open_requests(connection: str, repo: str) -> list[Request]:
@@ -42,8 +49,11 @@ def open_requests(connection: str, repo: str) -> list[Request]:
         found = URL_IN_TITLE.search(issue.get("title") or "")
         if not found:
             continue
+        title = issue.get("title") or ""
+        named = SECTION_IN_TITLE.search(title)
         out.append(Request(issue["number"], found.group(1).rstrip(".,)"),
-                           (issue.get("user") or {}).get("login", "someone")))
+                           (issue.get("user") or {}).get("login", "someone"),
+                           named.group(1) if named else ""))
     return sorted(out, key=lambda r: r.number)
 
 
@@ -110,7 +120,7 @@ SHOT = (1100, 5000)
 
 
 def erase_page(url: str, *, out: Path, runs: int = 2, use_pos: bool = False,
-               shot_size: tuple[int, int] = SHOT):
+               shot_size: tuple[int, int] = SHOT, section: str = ""):
     """Read the page, enumerate its erasures. Returns (words, rung, shot) or None.
 
     The DOM is asked first and OCR is the fallback, not the other way round.
@@ -124,11 +134,16 @@ def erase_page(url: str, *, out: Path, runs: int = 2, use_pos: bool = False,
     words = None
     got = dom.read(url, shot_path, width=shot_size[0])
     if got is not None:
-        # A long page is cut at its own headings rather than at a word count.
-        # Cheaper and a better unit: a 60,280-word chapter costs 29 seconds to
-        # read and minutes to sample, where the section worth erasing is 184
-        # words and 8 seconds end to end.
-        words, shot = dom.largest_section(got), Path(got.png)
+        shot = Path(got.png)
+        # A named section when one was asked for, otherwise the longest. Either
+        # way a long page is cut at its own headings rather than at a word
+        # count, which would cut wherever the count happened to run out.
+        words = dom.named_section(got, section) if section else None
+        if not words:
+            if section:
+                print(f"  no section matching {section!r}; using the page",
+                      file=sys.stderr)
+            words = dom.largest_section(got)
 
     if words is None or len(words) < MIN_WORDS:
         try:

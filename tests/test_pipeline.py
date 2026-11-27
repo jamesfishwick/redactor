@@ -389,3 +389,90 @@ class TestMeteredSpace:
         # ten syllables of one trochee repeated cannot be iambic
         w = self._words("watery watery watery watery")
         assert Space(w, (10,), max_runs=4, meter="0101010101").count() == 0
+
+
+class TestSectionRequests:
+    def test_reads_a_named_section_from_the_title(self):
+        from redactor.agent import SECTION_IN_TITLE, URL_IN_TITLE
+        title = "erase: https://example.com/doc section: § 107 Fair use"
+        assert URL_IN_TITLE.search(title).group(1) == "https://example.com/doc"
+        assert SECTION_IN_TITLE.search(title).group(1) == "§ 107 Fair use"
+
+    def test_a_plain_request_names_no_section(self):
+        from redactor.agent import SECTION_IN_TITLE
+        assert SECTION_IN_TITLE.search("erase: https://example.com") is None
+
+
+class TestNamedSection:
+    def _read(self, groups):
+        from redactor.dom import Read
+        from redactor.source import Word
+        words, secs = [], []
+        for sec, tokens in groups:
+            for t in tokens.split():
+                words.append(Word(t, left=0, top=0, width=9, height=9,
+                                  line=f"l{sec}"))
+                secs.append(sec)
+        return Read(words, "x.png", "t", secs)
+
+    def test_stops_at_the_next_heading(self):
+        from redactor.dom import named_section
+        r = self._read([(0, "intro words here"),
+                        (1, "107. Fair use"),
+                        (2, "is a defense to infringement of copyright"),
+                        (3, "108. Libraries"),
+                        (4, "may reproduce copies")])
+        got = [w.text for w in named_section(r, "107. Fair use")]
+        assert "defense" in got and "copyright" in got
+        assert "Libraries" not in got and "reproduce" not in got
+        assert "intro" not in got
+
+    def test_unknown_heading_returns_nothing(self):
+        from redactor.dom import named_section
+        r = self._read([(0, "alpha beta gamma")])
+        assert named_section(r, "999. Nope") == []
+
+    def test_caps_a_runaway_section(self):
+        from redactor.dom import named_section
+        r = self._read([(0, "start " + "word " * 9000)])
+        assert len(named_section(r, "start", cap=500)) == 500
+
+
+class TestTightCrop:
+    def test_frame_spans_the_kept_words_not_the_page(self, tmp_path, monkeypatch):
+        import subprocess as sp
+        from redactor import render
+        from redactor.source import Word
+        calls = []
+        monkeypatch.setattr(sp, "run", lambda *a, **k: calls.append(a[0]) or
+                            sp.CompletedProcess(a[0], 0))
+        words = [Word("a", left=10, top=0, width=20, height=10, line="l"),
+                 Word("b", left=10, top=5000, width=20, height=10, line="m"),
+                 Word("c", left=10, top=9000, width=20, height=10, line="n")]
+        render.erase(tmp_path / "p.png", words, [1], tmp_path / "out.png")
+        crop = next(c[c.index("-crop") + 1] for c in calls if "-crop" in c)
+        height = int(crop.split("x")[1].split("+")[0])
+        # the kept word sits at 5000 with a 40px margin, so the frame is small
+        assert height < 200
+
+
+class TestChallengePages:
+    def test_spots_a_bot_wall(self):
+        from redactor.dom import is_challenge
+        assert is_challenge(
+            "Performing security verification This website uses a security "
+            "service to protect against malicious bots".split())
+
+    def test_spots_a_cloudflare_interstitial(self):
+        from redactor.dom import is_challenge
+        assert is_challenge("Just a moment ... Enable JavaScript and cookies "
+                            "to continue".split())
+
+    def test_leaves_an_ordinary_page_alone(self):
+        from redactor.dom import is_challenge
+        assert not is_challenge(MOBY)
+
+    def test_only_looks_at_the_opening(self):
+        from redactor.dom import is_challenge
+        # the phrase appearing deep in a long article is not a challenge
+        assert not is_challenge(MOBY * 3 + ["just", "a", "moment"])
