@@ -6,3 +6,4 @@ out/
 !docs/*.png
 .DS_Store
 .sprite
+.worktrees/
