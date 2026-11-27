@@ -84,7 +84,7 @@ Two styles. `black` lays an opaque bar over the erased words. `whiteout` is the 
 
 The fluid is mixed from the page rather than fixed. Sampling Ruefle's scan gives paper at `(237,212,188)` and fluid at `(244,240,242)`, so the rule is to take most of the color out of the background and raise its lightness. Applied to that same paper it returns `(245,243,241)`. That keeps the two in one family on any page, instead of dropping a white that belongs to no page onto a cream one or a dark one. `--fluid '#f5f3f1'` overrides it.
 
-A page already near white has nowhere lighter to go, so there the fluid goes slightly darker instead, and the stroke reads by its edges and texture rather than by its color.
+The fluid is never darker than the paper. Fluid sits on top of a page and catches more light than the page does, so mixing it darker reverses what the eye reads: the covered column turns into a wash, the paper around each surviving word turns into the brightest thing on the page, and the erasure looks applied to the words that were kept. Paper already at white gets fluid at white, and the stroke reads by its edges and its texture instead. A page can look blank where its words came out. It cannot look painted over the words that stayed.
 
 Neither style draws only over the words that were erased. The whole text column is covered first and the surviving words are composited back, because anything OCR failed to read would otherwise stay on the page. The whiteout is not fully opaque, so what ghosts through is bounded two ways: the column is blurred before it is covered, and the fluid never thins past `GHOST_FLOOR`. What shows is a word's shape and none of its letters.
 
