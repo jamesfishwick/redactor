@@ -8,7 +8,13 @@ could be destroyed mid-run without leaking one.
 
 Each erasure lands as a dated directory holding the poem, the rendered page
 and the provenance needed to check the work: the source URL, the form it
-satisfies, and how many erasures of that page also satisfied it.
+satisfies, and how many erasures of that page also satisfied it. The file is
+named README.md so that browsing into the directory renders it as a page.
+
+The agent writes only under `erasures/` and to `GALLERY.md`, and never touches
+a file a person edits. That boundary is not tidiness: this repo already cost
+one merge conflict when a human README met a machine one, and the agent
+commits far more often than anybody reviews.
 """
 
 from __future__ import annotations
@@ -60,32 +66,80 @@ def put_file(connection: str, repo: str, path: str, content: bytes,
     return (out.get("content") or {}).get("html_url")
 
 
+def raw_url(repo: str, path: str, branch: str = "main") -> str:
+    return f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+
+
+def page(*, url: str, poem: str, form: str, pool: int, note: str = "",
+         image_url: str | None = None, via: str = "") -> str:
+    """The markdown for one erasure."""
+    lines = [f"# {form}", "", "```", poem, "```", ""]
+    if image_url:
+        lines += [f"![erasure]({image_url})", ""]
+    lines += [f"Source: {url}"]
+    if via:
+        lines += ["", f"Found via: {via}"]
+    lines += ["", f"{pool:,} erasures of this page satisfy {form}."]
+    if note:
+        lines += ["", f"Chosen because: {note}"]
+    return "\n".join(lines) + "\n"
+
+
 def publish(connection: str, repo: str, *, url: str, poem: str, form: str,
             pool: int, note: str = "", image: Path | None = None,
-            stamp: str | None = None) -> dict[str, str]:
+            stamp: str | None = None, via: str = "") -> dict[str, str]:
     """Write one erasure to the repo. Returns the URLs written."""
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
     folder = f"erasures/{stamp}"
     written: dict[str, str] = {}
 
-    lines = [
-        f"# {form}", "",
-        "```", poem, "```", "",
-        f"Source: {url}", "",
-        f"Form: {form}. {pool:,} erasures of this page satisfy it.",
-    ]
-    if note:
-        lines += ["", f"Chosen because: {note}"]
-    readme = ("\n".join(lines) + "\n").encode()
-
-    got = put_file(connection, repo, f"{folder}/poem.md", readme,
-                   f"erasure: {form} from {url}")
-    if got:
-        written["poem"] = got
-
+    # The image goes first so the page can point at it.
+    image_url = None
     if image and image.exists():
         got = put_file(connection, repo, f"{folder}/erasure.png",
                        image.read_bytes(), f"erasure: render for {stamp}")
         if got:
             written["image"] = got
+            image_url = raw_url(repo, f"{folder}/erasure.png")
+
+    body = page(url=url, poem=poem, form=form, pool=pool, note=note,
+                image_url=image_url, via=via)
+    got = put_file(connection, repo, f"{folder}/README.md", body.encode(),
+                   f"erasure: {form} from {url}")
+    if got:
+        written["page"] = got
+        written["folder"] = f"https://github.com/{repo}/tree/main/{folder}"
+
+    _prepend_gallery(connection, repo, stamp=stamp, url=url, poem=poem,
+                     form=form, image_url=image_url, folder=folder)
     return written
+
+
+GALLERY_HEAD = """# Gallery
+
+Every erasure this agent has published, newest first. Each one deletes words
+from a single page and keeps the rest in their original order.
+
+This file is written by the agent. Nothing here is hand-edited.
+
+"""
+
+
+def _prepend_gallery(connection: str, repo: str, *, stamp: str, url: str,
+                     poem: str, form: str, image_url: str | None,
+                     folder: str) -> None:
+    existing = _call(connection, f"repos/{repo}/contents/GALLERY.md")
+    body = ""
+    if existing and existing.get("content"):
+        body = base64.b64decode(existing["content"]).decode("utf-8", "replace")
+        body = body[len(GALLERY_HEAD):] if body.startswith(GALLERY_HEAD) else body
+
+    entry = [f"## {stamp}", "", "```", poem, "```", ""]
+    if image_url:
+        entry += [f"![erasure]({image_url})", ""]
+    entry += [f"{form}, from <{url}>. "
+              f"[Full entry](https://github.com/{repo}/tree/main/{folder})", "", "---", ""]
+
+    put_file(connection, repo, "GALLERY.md",
+             (GALLERY_HEAD + "\n".join(entry) + body).encode(),
+             f"gallery: {stamp}")
