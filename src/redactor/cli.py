@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import candidates as cand
-from . import compare, ladder, rank, render, shapes, source, tagging
+from . import compare, ladder, publish, rank, render, shapes, source, tagging
 from .prosody import FORMS, METERS
 
 
@@ -29,6 +29,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-pos", action="store_true", help="skip part-of-speech pruning")
     p.add_argument("--no-llm", action="store_true", help="never call a model")
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--publish", metavar="OWNER/REPO",
+                   help="write the result to a repo through the GitHub connector")
+    p.add_argument("--connection", metavar="ID",
+                   help="GitHub connector id (discovered from the gateway if omitted)")
     p.add_argument("--show", type=int, default=5, help="how many candidates to print")
     p.add_argument("--compare", action="store_true",
                    help="print one poem per method with its candidate count")
@@ -98,11 +102,13 @@ def main(argv=None) -> int:
                 print(f"\nwrote {dest}", file=sys.stderr)
             return 0
         found = rung.candidates
+        form_label = rung.form
         print(f"form: {ladder.describe(rung)}", file=sys.stderr)
     else:
         e = cand.Enumerator(words, form, max_runs=args.runs, pos_tags=tags,
                             allowed_trigrams=tri, meter=METERS.get(args.form))
         found = e.all()
+        form_label = args.form
         print(f"candidates: {len(found)} ({args.form}, <={args.runs} runs)",
               file=sys.stderr)
     if not found:
@@ -138,9 +144,22 @@ def main(argv=None) -> int:
     if note:
         print("\n" + note)
 
+    dest = None
     if shot is not None:
         dest = render.erase(shot, words, chosen.indices(), args.out / "erasure.png")
         print(f"\nwrote {dest}", file=sys.stderr)
+
+    if args.publish:
+        conn = args.connection or rank.discover("github")
+        if not conn:
+            print("no GitHub connector reachable; nothing published",
+                  file=sys.stderr)
+            return 0
+        written = publish.publish(
+            conn, args.publish, url=args.url, poem=chosen.render(words),
+            form=form_label, pool=len(found), note=note, image=dest)
+        for kind, link in written.items():
+            print(f"published {kind}: {link}", file=sys.stderr)
     return 0
 
 
