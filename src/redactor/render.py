@@ -53,6 +53,25 @@ SAFETY = 4
 """Pixels held back from the gap between a kept run and its neighbour, to
 absorb the difference between an OCR box and the ink it reports."""
 
+BASELINE_TEXT = 12.0
+"""Median word height, in pixels, of body type in a screenshot taken at one
+device pixel per CSS pixel.
+
+Every constant above is a pixel count tuned against that. Screenshot the same
+page at twice the scale and they would all describe half as much of it, so the
+brushwork would thin and the paper around a kept word would close up while the
+type stayed the same size on screen. `text_unit` measures what the page
+actually came out at, and the geometry scales by it."""
+
+
+def text_unit(words, baseline: float = BASELINE_TEXT) -> float:
+    """How big this page's type is against the size the constants assume."""
+    placed = [w for w in words if w.placed]
+    if not placed:
+        return 1.0
+    median = sorted(w.height for w in placed)[len(placed) // 2]
+    return max(0.25, median / baseline)
+
 
 def _runs(indices: list[int], words) -> list[list[int]]:
     """Group kept indices into spans that are adjacent in the source and share
@@ -172,7 +191,7 @@ def _ragged(size: tuple[int, int], jitter: int, dest: Path, magick: str,
 
 
 def _brush(size: tuple[int, int], passes: int, dest: Path, magick: str,
-           seed: int | None) -> Path:
+           seed: int | None, unit: float = 1.0) -> Path:
     """Streaks along the line of type, full contrast, for the caller to level.
 
     Three scales of noise, because a brush leaves all three: whole passes that
@@ -204,10 +223,12 @@ def _brush(size: tuple[int, int], passes: int, dest: Path, magick: str,
           "+level", "62%,100%", str(band)])
     _run([magick, "-size", f"{w}x{h}", *_seed(seed, 977), "xc:gray(50%)",
           "+noise", "Random", "-channel", "R", "-separate", "+channel",
-          "-motion-blur", "0x60+0", "-auto-level", "-gamma", "2.2", str(long_)])
+          "-motion-blur", f"0x{60 * unit:.0f}+0", "-auto-level",
+          "-gamma", "2.2", str(long_)])
     _run([magick, "-size", f"{w}x{h}", *_seed(seed, 613), "xc:gray(50%)",
           "+noise", "Random", "-channel", "R", "-separate", "+channel",
-          "-motion-blur", "0x9+0", "-auto-level", "-gamma", "3.0", str(fine)])
+          "-motion-blur", f"0x{max(3.0, 9 * unit):.0f}+0", "-auto-level",
+          "-gamma", "3.0", str(fine)])
     _run([magick, str(long_), str(fine), "-compose", "Multiply", "-composite",
           str(band), "-compose", "Multiply", "-composite",
           "-alpha", "off", "-colorspace", "Gray", "-auto-level", str(dest)])
@@ -216,7 +237,8 @@ def _brush(size: tuple[int, int], passes: int, dest: Path, magick: str,
     return dest
 
 
-def _halo(span: list[int], words, pad: int) -> tuple[int, int, int, int]:
+def _halo(span: list[int], words, pad: int,
+          safety: int = SAFETY) -> tuple[int, int, int, int]:
     """The box restored for one kept run: the run, plus paper around it.
 
     The halo is what makes a run look brushed around rather than cut out, but
@@ -226,7 +248,7 @@ def _halo(span: list[int], words, pad: int) -> tuple[int, int, int, int]:
     on it. So each side is clamped independently against the nearest word that
     could be exposed on that side.
 
-    SAFETY comes off the gap before it is halved, because the boxes being
+    `safety` comes off the gap before it is halved, because the boxes being
     measured are OCR's and OCR's boxes are not the ink. A box that sits a few
     pixels inside its own glyphs makes an apparently safe half-gap reach them
     anyway, which is how a stray first letter gets left standing beside a kept
@@ -254,7 +276,7 @@ def _halo(span: list[int], words, pad: int) -> tuple[int, int, int, int]:
     below = [w.top for w in over if w.top >= bottom]
 
     def share(gap):
-        return max(0, min(pad, (gap - SAFETY) // 2))
+        return max(0, min(pad, (gap - safety) // 2))
 
     lp = pad if not before else share(left - max(before))
     rp = pad if not after else share(min(after) - right)
@@ -264,6 +286,7 @@ def _halo(span: list[int], words, pad: int) -> tuple[int, int, int, int]:
 
 
 def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Path:
+    safety = round(SAFETY * text_unit(words))
     x0, y0, x1, y1 = box
     work = dest.parent
     base = work / "_base.png"
@@ -272,7 +295,7 @@ def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Pa
 
     cmd = [magick, str(base)]
     for n, span in enumerate(_runs(sorted(keep), words)):
-        left, top, right, bottom = _halo(span, words, pad)
+        left, top, right, bottom = _halo(span, words, pad, safety)
         chip = work / f"_chip{n}.png"
         _run([magick, str(png), "-crop",
               f"{right - left}x{bottom - top}+{left}+{top}", "+repage", str(chip)])
@@ -293,7 +316,8 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
     # edge of the brushwork rather than as a crop.
     work = dest.parent
     fluid = color or fluid_color(page_background(png, box, magick))
-    x0, y0, x1, y1 = column(words, FLUID_PAD)
+    unit = text_unit(words)
+    x0, y0, x1, y1 = column(words, round(FLUID_PAD * unit))
     w, h = x1 - x0, y1 - y0
 
     # One pass per line of type: the fluid was dragged along the lines, so
@@ -301,12 +325,12 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
     placed = [w_ for w_ in words if w_.placed]
     passes = max(2, len({w_.line for w_ in placed}))
     line_h = max(6.0, sorted(w_.height for w_ in placed)[len(placed) // 2] * 1.4)
-    streaks = _brush((w, h), passes, work / "_brush.png", magick, seed)
+    streaks = _brush((w, h), passes, work / "_brush.png", magick, seed, unit)
 
     alpha = work / "_alpha.png"
     _run([magick, str(streaks), "+level", f"{GHOST_FLOOR * 100:.0f}%,100%",
-          str(_ragged((w, h), TEAR, work / "_edge.png", magick, seed,
-                      sigma=line_h)),
+          str(_ragged((w, h), round(TEAR * unit), work / "_edge.png", magick,
+                      seed, sigma=line_h)),
           "-compose", "Multiply", "-composite",
           "-alpha", "off", "-colorspace", "Gray", str(alpha)])
 
@@ -327,7 +351,7 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
     # its letters. Without this the thin places read as legible grey text.
     ghost = work / "_ghost.png"
     _run([magick, str(png), "-crop", f"{w}x{h}+{x0}+{y0}", "+repage",
-          "-blur", "0x3", str(ghost)])
+          "-blur", f"0x{3 * unit:.1f}", str(ghost)])
 
     base = work / "_base.png"
     _run([magick, str(png),
@@ -336,11 +360,12 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
 
     cmd = [magick, str(base)]
     for n, span in enumerate(_runs(sorted(keep), words)):
-        left, top, right, bottom = _halo(span, words, pad)
+        left, top, right, bottom = _halo(span, words, pad, round(SAFETY * unit))
         cw, ch = right - left, bottom - top
         chip = work / f"_chip{n}.png"
         _run([magick, str(png), "-crop", f"{cw}x{ch}+{left}+{top}", "+repage",
-              str(_ragged((cw, ch), 5, work / f"_cmask{n}.png", magick, seed, n + 1)),
+              str(_ragged((cw, ch), round(5 * unit),
+                          work / f"_cmask{n}.png", magick, seed, n + 1)),
               "-alpha", "off", "-compose", "CopyOpacity", "-composite", str(chip)])
         cmd += [str(chip), "-geometry", f"+{left}+{top}", "-composite"]
     cmd.append(str(dest))
@@ -363,8 +388,9 @@ def erase(png: Path, words, keep: list[int], dest: Path,
           seed: int | None = None, color: str | None = None) -> Path:
     if style not in STYLES:
         raise ValueError(f"unknown style {style!r}; expected one of {STYLES}")
-    box = column(words)
+    unit = text_unit(words)
+    box = column(words, round(MARGIN * unit))
     if style == "whiteout":
-        return _whiteout(png, words, keep, dest, box, max(pad, 7), magick,
-                         seed, color)
-    return _black(png, words, keep, dest, box, pad, magick)
+        return _whiteout(png, words, keep, dest, box,
+                         round(max(pad, 7) * unit), magick, seed, color)
+    return _black(png, words, keep, dest, box, round(pad * unit), magick)
