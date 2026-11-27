@@ -182,3 +182,29 @@ class TestLadder:
     def test_climb_gives_up_on_a_page_with_no_words(self):
         from redactor import ladder
         assert ladder.climb(words(["cat"]), max_runs=2) is None
+
+
+class TestScansionEvidence:
+    def test_accepts_shakespeare(self):
+        from redactor.prosody import scans
+        assert scans("Shall I compare thee to a summer's day".split(),
+                     "0101010101")
+
+    def test_accepts_an_all_monosyllabic_pentameter(self):
+        from redactor.prosody import scans
+        # no polysyllable to offer stress evidence, but five content words
+        assert scans("When I do count the clock that tells the time".split(),
+                     "0101010101")
+
+    def test_rejects_a_line_of_one_repeated_word(self):
+        from redactor.prosody import scans
+        assert not scans(["the"] * 10, "0101010101")
+
+    def test_rejects_a_line_of_only_function_words(self):
+        from redactor.prosody import scans
+        assert not scans("of the and to in on at by for with".split(),
+                         "0101010101")
+
+    def test_content_words_ignores_function_words(self):
+        from redactor.prosody import content_words
+        assert content_words("the clock that tells the time".split()) == 3

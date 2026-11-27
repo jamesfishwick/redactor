@@ -63,11 +63,49 @@ METERS: dict[str, str] = {
 }
 
 
-def scans(words: list[str], pattern: str) -> bool:
-    """Does this line fit the metrical pattern?
+# Used to measure lexical density, never to assign stress. Marking these
+# unstressed rejects "Shall I compare thee to a summer's day", because English
+# stress is positional and `to`, `a` and `be` take it depending on where they
+# fall. Counting them is safe; scanning with them is not.
+FUNCTION_WORDS = frozenset("""
+a an the this that these those my your his her its our their
+of to in on at by for from with into onto upon as than
+and or but nor so yet if though
+is are was were be been am do does did has have had
+will would shall should may might must can could
+i you he she it we they me him them us
+""".split())
 
-    Monosyllables carry no fixed stress in CMU and take it from position, so
-    they match either slot. A secondary stress is treated the same way.
+
+def content_words(words: list[str]) -> int:
+    return sum(1 for w in words if normalize(w) not in FUNCTION_WORDS)
+
+
+def scans(words: list[str], pattern: str, min_fixed: int = 2,
+          min_content: int = 3) -> bool:
+    """Does this line fit the metrical pattern, on evidence?
+
+    Monosyllables carry no lexical stress in CMU and take it from position, so
+    they match either slot. A line of ten monosyllables is therefore all
+    wildcards and scans as anything: measured on one page, 4.8% of accepted
+    pentameters were exactly that, which made the form mean "ten syllables"
+    again for one result in twenty. `min_fixed` is how many positions must
+    carry real stress before a line counts, which rejects the vacuous ones.
+
+    It cannot carry the check alone, because most English pentameter is
+    monosyllabic. "When I do count the clock that tells the time" has no
+    polysyllable at all and is perfectly iambic, so it offers no stress
+    evidence either. What separates it from "the the the the the the the the
+    the the" is not stress but lexical density, which `min_content` measures.
+    A line must satisfy one of the two.
+
+    A function-word list was tried here and removed. Marking `to`, `a` and
+    `be` unstressed rejects "Shall I compare thee to a summer's day", because
+    English stress is positional and those words take it or not depending on
+    where they fall. Doing this properly needs Optimality Theory over the
+    whole line, which is what `prosodic` implements. That library wants espeak
+    as a native dependency on every machine it runs, which is the trade not
+    taken here.
     """
     built = ""
     for w in words:
@@ -77,4 +115,7 @@ def scans(words: list[str], pattern: str) -> bool:
         built += s
     if len(built) != len(pattern):
         return False
-    return all(b == "?" or b == p for b, p in zip(built, pattern))
+    if not all(b == "?" or b == p for b, p in zip(built, pattern)):
+        return False
+    fixed = len(built) - built.count("?")
+    return fixed >= min_fixed or content_words(words) >= min_content
