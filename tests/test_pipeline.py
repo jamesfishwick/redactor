@@ -241,11 +241,28 @@ class TestFluidColor:
         fluid = int(render.fluid_color(paper)[1:3], 16)
         assert fluid > paper[0]
 
-    def test_darkens_when_there_is_no_headroom(self):
-        """White paper has nowhere lighter to go, so the fluid goes the other
-        way; a pure white stroke on a white page is no stroke at all."""
-        fluid = int(render.fluid_color((255, 255, 255))[1:3], 16)
-        assert fluid < 255
+    @pytest.mark.parametrize("paper", [
+        (255, 255, 255), (250, 250, 240), (237, 212, 188), (200, 190, 180),
+        (128, 128, 128), (26, 26, 30), (0, 0, 0), (255, 0, 0), (10, 40, 90),
+    ])
+    def test_is_never_darker_than_the_paper(self, paper):
+        """The invariant the look depends on.
+
+        Fluid sits on top of a page and catches more light than the page. Mix
+        it darker and the eye reads the result backwards: the covered column
+        becomes a wash and the paper around each surviving word becomes the
+        brightest thing on the page, so the erasure looks applied to the words
+        that were kept.
+        """
+        fluid = tuple(int(render.fluid_color(paper)[i:i + 2], 16)
+                      for i in (1, 3, 5))
+        assert sum(fluid) >= sum(paper), f"{paper} -> {fluid} is darker"
+
+    def test_white_paper_gets_white_fluid(self):
+        """Nowhere lighter to go, so the stroke reads by its edges and its
+        texture. Blank where words went is right; painted over the words that
+        stayed is not."""
+        assert render.fluid_color((255, 255, 255)) == "#ffffff"
 
     def test_handles_a_dark_page(self):
         fluid = int(render.fluid_color((20, 20, 24))[1:3], 16)

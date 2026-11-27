@@ -109,13 +109,22 @@ def fluid_color(bg, desaturate: float = 0.25, lighten: float = 0.12) -> str:
     which keeps the two in one family on any page rather than dropping a
     foreign white onto it.
 
-    Paper already near white has no headroom to lighten into, so the fluid
-    goes slightly darker instead and the stroke reads by its edges and texture
-    rather than by its color.
+    The fluid is never darker than the paper, which is why the lightness
+    clamps instead of falling back. Correction fluid sits on top of a page and
+    catches more light than the page does, so a darker cover reverses what the
+    eye reads: the covered column turns into a wash, the untouched paper
+    around each kept word turns into the brightest thing on the page, and the
+    erasure looks applied to the words that survived rather than to the ones
+    that went.
+
+    Paper already at white therefore gets fluid at white, and the stroke reads
+    by its edges and its texture rather than by its color. A page can look
+    blank where its words were taken out. It cannot look painted over the
+    words that stayed.
     """
     h, l, s = colorsys.rgb_to_hls(*(c / 255 for c in bg))
     s *= desaturate
-    l = l + lighten if l + lighten <= 1.0 else max(0.0, l - lighten / 2)
+    l = min(1.0, l + lighten)
     r, g, b = colorsys.hls_to_rgb(h, l, s)
     return "#%02x%02x%02x" % tuple(round(c * 255) for c in (r, g, b))
 
