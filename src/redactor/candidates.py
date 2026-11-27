@@ -30,7 +30,7 @@ from functools import lru_cache
 # is for a page that slips through with an unusual word count.
 sys.setrecursionlimit(max(sys.getrecursionlimit(), 5000))
 
-from .prosody import METERS, scans, syllables
+from .prosody import METERS, scans, stress, syllables
 
 
 @dataclass(frozen=True)
@@ -167,57 +167,95 @@ class Space:
     whether word i-1 survived, not which word it was.
     """
 
-    def __init__(self, words, form, max_runs: int = 2):
+    # Table size is words x lines x syllables x runs x 2. Chapter 1 of the
+    # Copyright Act is 72,731 words in one page, which is roughly 20 million
+    # cells before a single sample is drawn, and each sample then walks every
+    # word. A cap is a real limit on what a page can be, so it is set where
+    # choice stops mattering rather than where memory runs out: 15,000 words
+    # already admit erasures in the hundreds of millions.
+    MAX_WORDS = 15000
+
+    def __init__(self, words, form, max_runs: int = 2, meter: str | None = None):
+        if len(words) > self.MAX_WORDS:
+            words = words[:self.MAX_WORDS]
         self.w = words
         self.form = tuple(form)
         self.max_runs = max_runs
         self.syl = [syllables(x.text) for x in words]
         self.line = [getattr(x, "line", "") for x in words]
+        # Stress is checked as each word is placed rather than after a line
+        # exists, which is what made metered forms expensive: fewer than one
+        # draw in five hundred scanned, so sixty usable poems cost thirty
+        # thousand draws and each one walked the whole page.
+        #
+        # No extra state is needed for it. `used` is the count of syllables
+        # already in the line, so it is also the offset into the line's
+        # pattern, and a word's own stress has to match the slice starting
+        # there. A word CMU does not know contributes wildcards.
+        self.pattern = tuple(meter.split("/")) if meter else None
+        if self.pattern:
+            self.stress = []
+            for word, n in zip(words, self.syl):
+                st = stress(word.text)
+                self.stress.append(st if st and len(st) == n else "?" * n)
         self._table = None
 
+    def _fits(self, i, l, u) -> bool:
+        """Does word i's stress match the pattern at this offset?"""
+        if self.pattern is None:
+            return True
+        pat = self.pattern[l]
+        st = self.stress[i]
+        if u + len(st) > len(pat):
+            return False
+        return all(a == "?" or a == b for a, b in zip(st, pat[u:u + len(st)]))
+
+    def _idx(self, i, l, u, r, p):
+        return ((((i * (len(self.form) + 1) + l) * self._U + u)
+                 * self._R + r) * 2 + p)
+
     def _build(self):
+        """One flat list, filled from the last word backwards.
+
+        Nested lists cost an object header per cell, which a page of this size
+        cannot afford. Walking i downwards works because a cell only ever reads
+        cells at i+1.
+        """
         n, form, syl, line = len(self.w), self.form, self.syl, self.line
-        L, U, R = len(form), max(form) + 1, self.max_runs + 1
-        # table[i][l][u][r][p] = completions from word i onward
-        table = [[[[[0, 0] for _ in range(R)] for _ in range(U)]
-                  for _ in range(L + 1)] for _ in range(n + 1)]
-        for l in range(L + 1):
-            for u in range(U):
-                for r in range(R):
-                    for p in (0, 1):
-                        table[n][l][u][p if False else r][p] = 0
-        # a finished poem: every line filled exactly
-        for r in range(R):
-            for p in (0, 1):
-                table[n][L][0][r][p] = 1
+        L = len(form)
+        self._U = U = max(form) + 1
+        self._R = R = self.max_runs + 1
+        table = [0] * ((n + 1) * (L + 1) * U * R * 2)
 
         for i in range(n, -1, -1):
             for l in range(L, -1, -1):
                 for u in range(U - 1, -1, -1):
                     for r in range(R):
                         for p in (0, 1):
+                            at = self._idx(i, l, u, r, p)
                             if l == L:
-                                table[i][l][u][r][p] = 1 if u == 0 else 0
+                                table[at] = 1 if u == 0 else 0
                                 continue
                             if u == form[l]:
-                                table[i][l][u][r][p] = table[i][l + 1][0][r][p]
+                                table[at] = table[self._idx(i, l + 1, 0, r, p)]
                                 continue
                             if i == n:
-                                table[i][l][u][r][p] = 0
+                                table[at] = 0
                                 continue
-                            total = table[i + 1][l][u][r][0]
+                            total = table[self._idx(i + 1, l, u, r, 0)]
                             s = syl[i]
                             joins = p == 1 and i > 0 and line[i - 1] == line[i]
                             nr = r + (0 if joins else 1)
-                            if u + s <= form[l] and nr <= self.max_runs:
-                                total += table[i + 1][l][u + s][nr][1]
-                            table[i][l][u][r][p] = total
+                            if (u + s <= form[l] and nr <= self.max_runs
+                                    and self._fits(i, l, u)):
+                                total += table[self._idx(i + 1, l, u + s, nr, 1)]
+                            table[at] = total
         self._table = table
 
     def count(self) -> int:
         if self._table is None:
             self._build()
-        return self._table[0][0][0][0][0]
+        return self._table[self._idx(0, 0, 0, 0, 0)]
 
     def sample(self, k: int, rng=None) -> list[Candidate]:
         """Draw k poems uniformly at random from the whole space.
@@ -242,12 +280,13 @@ class Space:
                     lines.append(tuple(cur)); cur = []
                     l, u = l + 1, 0
                     continue
-                skip = t[i + 1][l][u][r][0] if i < n else 0
+                skip = t[self._idx(i + 1, l, u, r, 0)] if i < n else 0
                 s = syl[i] if i < n else 0
                 joins = p == 1 and i > 0 and line[i - 1] == line[i]
                 nr = r + (0 if joins else 1)
-                keep = (t[i + 1][l][u + s][nr][1]
-                        if i < n and u + s <= form[l] and nr <= self.max_runs else 0)
+                keep = (t[self._idx(i + 1, l, u + s, nr, 1)]
+                        if (i < n and u + s <= form[l] and nr <= self.max_runs
+                            and self._fits(i, l, u)) else 0)
                 if keep and rng.random() < keep / (keep + skip):
                     cur.append(i); u += s; r, p = nr, 1
                 else:

@@ -20,6 +20,7 @@ almost never as a sentence, which makes it a last resort rather than a goal.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from .candidates import Enumerator, Space
@@ -44,7 +45,7 @@ class Rung:
 
 def climb(words, *, max_runs=2, pos_tags=None, trigrams=None,
           want=1, limit=20000, sample=60, max_draws=40000,
-          rng=None) -> Rung | None:
+          budget_s: float = 90.0, rng=None) -> Rung | None:
     """Return the hardest form this page admits, with candidates to choose from.
 
     The candidates are drawn uniformly from the whole space rather than taken
@@ -52,29 +53,41 @@ def climb(words, *, max_runs=2, pos_tags=None, trigrams=None,
     behind it is wide, and one page measured here admits 182,040 ballads in its
     first 600 words alone; handing a ranker the first sixty of those gives it
     sixty poems from one corner of the page.
+
+    `budget_s` bounds the whole climb in wall-clock, because this runs on a
+    Sprite billed by the second. Rejection sampling for a metered form is where
+    the time goes: fewer than one draw in five hundred scans, so a long page
+    can spend minutes drawing. When the budget runs out the climb returns
+    whatever it has rather than nothing, and drops to an easier form if it has
+    nothing at all.
     """
+    deadline = time.monotonic() + budget_s
     for name in RUNGS:
         meter = METERS.get(name)
-        space = Space(words, FORMS[name], max_runs=max_runs)
+        space = Space(words, FORMS[name], max_runs=max_runs, meter=meter)
         pool = space.count()
         if pool < want:
             continue
-        if not meter:
-            drawn = space.sample(sample, rng)
-        else:
-            # Scansion is checked after a line exists, not while it is built,
-            # so metered forms are sampled until enough survive. On one page
-            # fewer than one draw in a hundred scans, which is the whole
-            # reason the ranker was being handed two poems out of 26 million.
-            patterns = meter.split("/")
-            drawn, tries = [], 0
-            while len(drawn) < sample and tries < max_draws:
-                batch = space.sample(min(2000, max_draws - tries), rng)
-                tries += len(batch)
-                drawn += [c for c in batch
-                          if len(c.lines) == len(patterns)
-                          and all(scans([words[i].text for i in line], pat)
-                                  for line, pat in zip(c.lines, patterns))]
+
+        # Stress is enforced while the table is built, so every draw already
+        # scans and none are thrown away. What the table cannot see is whether
+        # a line offers any evidence that it scans: a line of ten monosyllables
+        # matches any pattern. That is a property of the finished line, so it
+        # filters the sample, which is small and costs nothing to walk again.
+        drawn, tries = [], 0
+        patterns = meter.split("/") if meter else None
+        while (len(drawn) < sample and tries < max_draws
+               and time.monotonic() < deadline):
+            batch = space.sample(min(sample * 2, max_draws - tries), rng)
+            if not batch:
+                break
+            tries += len(batch)
+            if not patterns:
+                drawn += batch
+                continue
+            drawn += [c for c in batch
+                      if all(scans([words[i].text for i in line], pat)
+                             for line, pat in zip(c.lines, patterns))]
         drawn = drawn[:sample]
         if len(drawn) >= want:
             return Rung(name, meter is not None, pool, drawn)

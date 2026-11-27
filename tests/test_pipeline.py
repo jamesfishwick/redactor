@@ -297,3 +297,95 @@ class TestSpace:
         from redactor.candidates import Space
         from redactor.source import Word
         assert Space([Word("cat")], (5, 7, 5), max_runs=2).sample(5) == []
+
+
+class TestSectionSlice:
+    def _words(self, text):
+        from redactor.source import Word
+        return [Word(t, left=0, top=0, width=9, height=9, line="l")
+                for t in text.split()]
+
+    def test_takes_the_named_section(self):
+        from redactor.dom import slice_between
+        w = self._words("preamble here § 106 exclusive rights blah "
+                        "§ 107 fair use is a defense § 108 libraries may copy")
+        got = [x.text for x in slice_between(w, "§ 107", "§ 108")]
+        assert "fair" in got and "use" in got
+        assert "libraries" not in got
+        assert "exclusive" not in got
+
+    def test_runs_to_the_end_without_an_end_marker(self):
+        from redactor.dom import slice_between
+        w = self._words("alpha beta § 107 gamma delta")
+        got = [x.text for x in slice_between(w, "§ 107")]
+        assert "gamma" in got and "alpha" not in got
+
+    def test_missing_start_yields_nothing(self):
+        from redactor.dom import slice_between
+        assert slice_between(self._words("alpha beta"), "§ 999") == []
+
+    def test_matches_across_whitespace_and_case(self):
+        from redactor.dom import slice_between
+        w = self._words("x § 107 Fair Use y")
+        assert slice_between(w, "§ 107 fair use") != []
+
+
+class TestLargestSection:
+    def _read(self, groups):
+        from redactor.dom import Read
+        from redactor.source import Word
+        words, secs = [], []
+        for n, (sec, count) in enumerate(groups):
+            for i in range(count):
+                words.append(Word(f"w{sec}_{i}", left=0, top=0,
+                                  width=9, height=9, line=f"l{sec}"))
+                secs.append(sec)
+        return Read(words, "x.png", "t", secs)
+
+    def test_picks_the_longest_run_under_one_heading(self):
+        from redactor.dom import largest_section
+        got = largest_section(self._read([(0, 50), (1, 400), (2, 60)]), floor=150)
+        assert len(got) == 400
+        assert all(w.text.startswith("w1_") for w in got)
+
+    def test_keeps_the_whole_page_when_no_section_is_big_enough(self):
+        from redactor.dom import largest_section
+        r = self._read([(0, 100), (1, 120), (2, 110)])
+        assert len(largest_section(r, floor=150)) == len(r.words)
+
+    def test_short_pages_are_left_alone(self):
+        from redactor.dom import largest_section
+        r = self._read([(0, 40), (1, 60)])
+        assert largest_section(r, floor=150) == r.words
+
+
+class TestMeteredSpace:
+    def _words(self, text):
+        from redactor.source import Word
+        return [Word(t, left=0, top=0, width=9, height=9, line="l")
+                for t in text.split()]
+
+    def test_every_sample_already_scans(self):
+        from redactor.candidates import Space
+        from redactor.prosody import METERS, scans
+        w = self._words(" ".join(MOBY * 4))
+        got = Space(w, (10,), max_runs=2,
+                    meter=METERS["pentameter"]).sample(40, __import__("random").Random(3))
+        assert got
+        for c in got:
+            assert scans([w[i].text for i in c.indices()], "0101010101",
+                         min_fixed=0, min_content=0)
+
+    def test_metered_space_is_a_subset_of_the_plain_one(self):
+        from redactor.candidates import Space
+        from redactor.prosody import METERS
+        w = self._words(" ".join(MOBY * 2))
+        plain = Space(w, (10,), max_runs=2).count()
+        metered = Space(w, (10,), max_runs=2, meter=METERS["pentameter"]).count()
+        assert 0 < metered < plain
+
+    def test_an_unsatisfiable_meter_counts_zero(self):
+        from redactor.candidates import Space
+        # ten syllables of one trochee repeated cannot be iambic
+        w = self._words("watery watery watery watery")
+        assert Space(w, (10,), max_runs=4, meter="0101010101").count() == 0
