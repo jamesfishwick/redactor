@@ -112,10 +112,9 @@ MIN_WORDS = 120     # below this a page yields a pool too small to choose from
 # page. More source is not more poem, since the form is a fixed size either way.
 # It is a wider choice of which fixed-size poem to keep.
 
-# A viewport-sized shot catches only the top of a page. The Hacksgiving rules
-# gave 92 words at 1000x1500 against 504 in its HTML, which is the difference
-# between declining a page and erasing it. Taller is also a better picture:
-# more of the page goes black around what survives.
+# Width sets the layout the page is measured in, so it decides where words
+# wrap and therefore what counts as a line. Height is only the OCR fallback's
+# viewport, since the DOM path clips its own capture to the words it kept.
 SHOT = (1100, 5000)
 
 
@@ -132,18 +131,15 @@ def erase_page(url: str, *, out: Path, runs: int = 2, use_pos: bool = False,
 
     shot_path = out / "page.png"
     words = None
-    got = dom.read(url, shot_path, width=shot_size[0])
+    # The section is chosen inside the read, not after it. The capture is
+    # clipped to whatever was chosen, so asking afterwards would clip to the
+    # wrong part of the page and then look for the section in it.
+    got = dom.read(url, shot_path, width=shot_size[0], section=section)
     if got is not None:
-        shot = Path(got.png)
-        # A named section when one was asked for, otherwise the longest. Either
-        # way a long page is cut at its own headings rather than at a word
-        # count, which would cut wherever the count happened to run out.
-        words = dom.named_section(got, section) if section else None
-        if not words:
-            if section:
-                print(f"  no section matching {section!r}; using the page",
-                      file=sys.stderr)
-            words = dom.largest_section(got)
+        shot, words = Path(got.png), got.words
+        if section and len(words) < MIN_WORDS:
+            print(f"  section {section!r} gave {len(words)} words",
+                  file=sys.stderr)
 
     if words is None or len(words) < MIN_WORDS:
         try:
@@ -154,12 +150,17 @@ def erase_page(url: str, *, out: Path, runs: int = 2, use_pos: bool = False,
             ocr = source.from_image(shot, pairs=pairs)
             if len(ocr) < MIN_WORDS and pairs is not None:
                 ocr = source.from_image(shot)
+            # The DOM path rejects a page that only answered with a bot
+            # challenge. Reading the same page again with a different tool
+            # would erase the challenge, which is what this guards against.
+            if dom.is_challenge([w.text for w in ocr]):
+                return None
             if words is None or len(ocr) > len(words):
                 words = ocr
         except Exception:
             if words is None:
                 return None
-    if len(words) < MIN_WORDS:
+    if words is None or len(words) < MIN_WORDS:
         return None
 
     tags = tri = None

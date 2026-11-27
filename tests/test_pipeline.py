@@ -476,3 +476,19 @@ class TestChallengePages:
         from redactor.dom import is_challenge
         # the phrase appearing deep in a long article is not a challenge
         assert not is_challenge(MOBY * 3 + ["just", "a", "moment"])
+
+
+class TestSectionReachesTheReader:
+    def test_erase_page_passes_the_section_to_the_reader(self, monkeypatch):
+        from redactor import agent, dom
+        seen = {}
+
+        def fake_read(url, png, **kw):
+            seen.update(kw)
+            return None
+
+        monkeypatch.setattr(dom, "read", fake_read)
+        monkeypatch.setattr(agent, "MIN_WORDS", 1)
+        agent.erase_page("https://example.com", out=__import__("pathlib").Path("/tmp"),
+                         section="§ 107")
+        assert seen.get("section") == "§ 107"
