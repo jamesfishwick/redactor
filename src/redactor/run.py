@@ -28,6 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--runs", type=int, default=2)
     p.add_argument("--pos", action="store_true", help="enable part-of-speech pruning")
     p.add_argument("--no-llm", action="store_true")
+    p.add_argument("--mode", default="whiteout", choices=["whiteout", "blackout"],
+                   help="bars over what went (default) or a field with the poem showing")
     p.add_argument("--dry-run", action="store_true",
                    help="say what it would do and publish nothing")
     return p
@@ -57,7 +59,8 @@ def main(argv=None) -> int:
     for candidate in jobs:
         print(f"{kind}: {candidate.url}", file=sys.stderr)
         got = agent.erase_page(candidate.url, out=args.out, runs=args.runs,
-                               use_pos=args.pos)
+                               use_pos=args.pos,
+                               section=getattr(candidate, "section", ""))
         if got is not None:
             job = candidate
             break
@@ -86,7 +89,8 @@ def main(argv=None) -> int:
         chosen = rank.arbitrary(rung.candidates)
 
     from . import render
-    image = render.erase(shot, words, chosen.indices(), args.out / "erasure.png")
+    image = render.erase(shot, words, chosen.indices(),
+                         args.out / "erasure.png", mode=args.mode)
     poem = chosen.render(words)
 
     written = publish.publish(conn, args.repo, url=url, poem=poem,
