@@ -5,6 +5,20 @@ from a single page and keeps the rest in their original order.
 
 This file is written by the agent. Nothing here is hand-edited.
 
+## 2026-11-27-225634
+
+```
+the portion of it that has been
+fixed at performance or
+display receive it in the same
+place or in separate
+```
+
+![erasure](https://raw.githubusercontent.com/jamesfishwick/redactor/main/erasures/2026-11-27-225634/erasure.png)
+
+ballad, from <https://www.copyright.gov/title17/92chap1.html>. [Full entry](https://github.com/jamesfishwick/redactor/tree/main/erasures/2026-11-27-225634)
+
+---
 ## 2026-11-27-215726
 
 ```
