@@ -336,7 +336,8 @@ def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Pa
 
 
 def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
-              seed: int | None, color: str | None) -> Path:
+              seed: int | None, color: str | None,
+              limit: int = 0) -> Path:
     # Two boxes, because they answer different questions. The paper is sampled
     # from the wider one, so a page whose text runs to the edge of its column
     # still offers enough background to find a mode in. The fluid is laid over
@@ -345,7 +346,8 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
     work = dest.parent
     fluid = color or fluid_color(page_background(png, box, magick))
     unit = text_unit(words)
-    x0, y0, x1, y1 = column(words, round(FLUID_PAD * unit))
+    x0, y0, x1, y1 = column(words, round(FLUID_PAD * unit), keep=keep,
+                            page_height=limit)
     w, h = x1 - x0, y1 - y0
 
     # One pass per line of type: the fluid was dragged along the lines, so
@@ -419,7 +421,59 @@ def erase(png: Path, words, keep: list[int], dest: Path,
     unit = text_unit(words)
     box = column(words, round(MARGIN * unit), keep=keep,
                  page_height=page_height(png, magick))
+    limit = page_height(png, magick)
     if style == "whiteout":
-        return _whiteout(png, words, keep, dest, box,
-                         round(max(pad, 7) * unit), magick, seed, color)
-    return _black(png, words, keep, dest, box, round(pad * unit), magick)
+        out = _whiteout(png, words, keep, dest, box,
+                        round(max(pad, 7) * unit), magick, seed, color, limit)
+    else:
+        out = _black(png, words, keep, dest, box, round(pad * unit), magick)
+    return _close_the_gaps(out, words, keep, box, magick)
+
+
+def _close_the_gaps(rendered: Path, words, keep, box, magick: str) -> Path:
+    """Drop the covered lines that hold nothing, and stack what is left.
+
+    A poem drawn from a long article lands in a few lines separated by
+    thousands of pixels. Rendering the span between them is faithful to the
+    page and unreadable: one ballad put its two halves 2,000 pixels apart with
+    nothing in between but covering. What remains is every line that still
+    carries words, in order, with the emptiness between them gone.
+
+    Done after the fact rather than inside each style, because both render one
+    box and neither would otherwise need to know about the other's geometry.
+    """
+    kept = [words[i] for i in keep if words[i].placed]
+    rows = sorted({(w.top, w.top + w.height) for w in kept})
+    bands, slack = [list(rows[0])], 2
+    for top, bottom in rows[1:]:
+        if top <= bands[-1][1] + slack:
+            bands[-1][1] = max(bands[-1][1], bottom)
+        else:
+            bands.append([top, bottom])
+    if len(bands) < 2:
+        return rendered
+
+    x0, _, x1, _ = box
+    width = x1 - x0
+    total = page_height(rendered, magick)
+    work, strips = rendered.parent, []
+    for n, (top, bottom) in enumerate(bands):
+        # Both styles composite onto the page rather than onto a crop of it,
+        # so the render is already in page coordinates and the band needs no
+        # shift. Pad by the gap to the next band, bounded, so a line keeps
+        # some paper under it rather than being cut at the glyphs.
+        gap = min(24, (bands[n + 1][0] - bottom) // 2) if n + 1 < len(bands) else 12
+        top_in = max(0, top - 12)
+        high = min(total - top_in, (bottom - top) + 12 + max(gap, 4))
+        if high <= 0:
+            continue
+        strip = work / f"_band{n}.png"
+        _run([magick, str(rendered), "-crop",
+              f"{width}x{high}+{max(0, x0)}+{top_in}", "+repage", str(strip)])
+        strips.append(str(strip))
+
+    if len(strips) > 1:
+        _run([magick] + strips + ["-append", str(rendered)])
+    for f in work.glob("_band*.png"):
+        f.unlink(missing_ok=True)
+    return rendered

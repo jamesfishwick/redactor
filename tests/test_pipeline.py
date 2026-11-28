@@ -857,3 +857,46 @@ class TestTsvParsing:
     def test_words_without_letters_are_still_dropped(self):
         got = source.words_from_tsv(self.tsv(("real", 10, 96), ("--", 10, 96)))
         assert [w.text for w in got] == ["real"]
+
+
+class TestGapClosing:
+    def _spread(self, tops):
+        from redactor.source import Word
+        return [Word("w", left=10, top=t, width=40, height=12, line=f"P-{t}")
+                for t in tops]
+
+    def test_a_poem_on_one_line_is_left_alone(self, monkeypatch, tmp_path):
+        import subprocess as sp
+        from redactor import render
+        calls = []
+        monkeypatch.setattr(render, "_run", lambda c: calls.append(c))
+        monkeypatch.setattr(render, "page_height", lambda *a, **k: 400)
+        out = render._close_the_gaps(tmp_path / "r.png", self._spread([0, 10]),
+                                     [0, 1], (0, 0, 500, 100), "magick")
+        assert out == tmp_path / "r.png"
+        assert not calls          # nothing to close
+
+    def test_a_poem_split_down_a_page_is_stacked(self, monkeypatch, tmp_path):
+        from redactor import render
+        calls = []
+        monkeypatch.setattr(render, "_run", lambda c: calls.append(c))
+        monkeypatch.setattr(render, "page_height", lambda *a, **k: 9000)
+        render._close_the_gaps(tmp_path / "r.png", self._spread([0, 4000, 8000]),
+                               [0, 1, 2], (0, 0, 500, 9000), "magick")
+        crops = [c for c in calls if "-crop" in c]
+        assert len(crops) == 3            # one band per line that carries words
+        assert any("-append" in c for c in calls)
+
+    def test_each_band_is_short(self, monkeypatch, tmp_path):
+        from redactor import render
+        calls = []
+        monkeypatch.setattr(render, "_run", lambda c: calls.append(c))
+        monkeypatch.setattr(render, "page_height", lambda *a, **k: 9000)
+        render._close_the_gaps(tmp_path / "r.png", self._spread([0, 4000]),
+                               [0, 1], (0, 0, 500, 9000), "magick")
+        for c in calls:
+            if "-crop" in c:
+                geom = c[c.index("-crop") + 1]
+                assert int(geom.split("x")[1].split("+")[0]) < 100
+                # page coordinates, not shifted by a crop origin
+                assert int(geom.split("+")[2]) in (0, 3988)
