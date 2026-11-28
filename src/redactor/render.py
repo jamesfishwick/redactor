@@ -195,6 +195,9 @@ def window(words, keep: list[int], page_lines: int = PAGE_LINES,
     last = len(lines) - 1
     ranges = _merge([[max(0, n - context), min(last, n + context)] for n in at])
     budget = min(page_lines, len(lines))
+    # The budget is the only stop. A pass that widens nothing has to mean the
+    # ranges already span the page, where the sum has reached `len(lines)` and
+    # the budget can be no larger than that, so the loop has already ended.
     while sum(hi - lo + 1 for lo, hi in ranges) < budget:
         for r in ranges:
             r[0], r[1] = max(0, r[0] - 1), min(last, r[1] + 1)
@@ -206,13 +209,18 @@ def covered(lines, ranges, limit: int, unit: float) -> tuple[int, int]:
     """Top and bottom of the only strip of page worth covering.
 
     `_frame` throws away everything outside the window, so brushing the rest
-    is work that never reaches the image. On one page it was the difference
-    between 2.6 seconds and 52.
+    is work that never reaches the image. Measured on the Hacker News
+    guidelines, covering this band rather than the whole column took the
+    whiteout from 51.4 seconds to 21.7.
 
     The band runs past the window's own crop by the fluid's pad and its tear,
     so the torn edge of the stroke falls outside the visible image instead of
-    across the top of it. With no window to show, the whole page is covered,
-    because that is the case where `_frame` returns the page uncropped.
+    across the top of it.
+
+    With no window at all the whole page is covered, which is one of the two
+    paths where `_frame` hands the page back uncropped. On the other, a window
+    whose spans all fall outside the render, the page would come back covered
+    only as far as this band reaches. No input has been found that takes it.
     """
     if not ranges:
         return 0, limit
