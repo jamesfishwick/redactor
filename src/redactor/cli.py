@@ -151,10 +151,10 @@ def main(argv=None) -> int:
     note = ""
     chosen = None
     if not args.no_llm:
-        picked = rank.by_model(found, words, args.url)
+        picked = rank.by_model(found, words, args.url,
+                               log=lambda m: print(m, file=sys.stderr))
         if picked:
             chosen, note = picked
-            print("ranked by model", file=sys.stderr)
     if chosen is None:
         chosen = rank.arbitrary(found, args.seed)
         print("no model available; chose arbitrarily", file=sys.stderr)

@@ -85,7 +85,8 @@ def main(argv=None) -> int:
     note = ""
     chosen = None
     if not args.no_llm:
-        picked = rank.by_model(rung.candidates, words, url)
+        picked = rank.by_model(rung.candidates, words, url,
+                               log=lambda m: print(f"  {m}", file=sys.stderr))
         if picked:
             chosen, note = picked
     if chosen is None:
