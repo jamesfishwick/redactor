@@ -205,10 +205,13 @@ def scans(words: list[str], pattern: str, min_fixed: int = 2,
     A function-word list was tried here and removed. Marking `to`, `a` and
     `be` unstressed rejects "Shall I compare thee to a summer's day", because
     English stress is positional and those words take it or not depending on
-    where they fall. Doing this properly needs Optimality Theory over the
-    whole line, which is what `prosodic` implements. That library wants espeak
-    as a native dependency on every machine it runs, which is the trade not
-    taken here.
+    where they fall.
+
+    What this cannot do at all is tell a line of ten content monosyllables
+    from iambic pentameter, since both are wildcards throughout and both are
+    lexically dense. `violations` can, and is the gate that follows this one.
+    This stays in front of it because it is cheap, and because it guarantees
+    what that one needs: a line here holds no word CMU cannot pronounce.
     """
     built = ""
     for w in words:
