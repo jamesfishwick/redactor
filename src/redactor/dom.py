@@ -413,7 +413,7 @@ def read_page(url: str, png, *, width: int = 1100, height: int = 5000,
                 return None
             if words is None or len(ocr) > len(words):
                 words = ocr
-        except Exception:
+        except Exception:  # noqa: BLE001 - OCR is already the fallback
             if words is None:
                 return None
 

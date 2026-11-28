@@ -42,14 +42,14 @@ class TestReadPage:
         readers["dom"] = words(200, "d")
         readers["ocr"] = words(999, "o")   # would win if it were consulted
         got, shot = dom.read_page("u", tmp_path / "p.png", least=120)
-        assert [w.text for w in got][0] == "d0"
+        assert next(w.text for w in got) == "d0"
         assert shot == tmp_path / "p.png"
 
     def test_ocr_words_come_with_the_ocr_image(self, readers, tmp_path):
         readers["dom"] = words(50, "d")
         readers["ocr"] = words(300, "o")
         got, shot = dom.read_page("u", tmp_path / "p.png", least=120)
-        assert [w.text for w in got][0] == "o0"
+        assert next(w.text for w in got) == "o0"
         assert shot == readers["ocr_png"]
 
     def test_dom_words_are_never_paired_with_the_ocr_image(self, readers,
@@ -78,7 +78,6 @@ class TestReadPage:
     def test_a_challenge_page_is_refused(self, readers, monkeypatch, tmp_path):
         readers["dom"] = None
         readers["ocr"] = [Word(t) for t in
-                          "Verifying you are human This may take a few "
-                          "seconds".split()]
+                          ["Verifying", "you", "are", "human", "This", "may", "take", "a", "few", "seconds"]]
         monkeypatch.setattr(dom, "is_challenge", lambda ws: True)
         assert dom.read_page("u", tmp_path / "p.png", least=1) is None
