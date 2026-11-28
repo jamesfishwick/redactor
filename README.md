@@ -18,16 +18,16 @@ From [section 107 of the Copyright Act](https://www.copyright.gov/title17/92chap
 commercial nature is unpublished shall
 ```
 
-From [a tabletop blog arguing about how to end a session](https://theangrygm.com/ask-angry-journey-home/). 1,975 words of article, 68,713 ballads:
+From [a tabletop blog arguing about how to end a session](https://theangrygm.com/ask-angry-journey-home/). 1,975 words of article, 187 of whose erasures are rhymed quatrains:
 
 ```
-their daughter shit herself to death
-on the way home because
-the rations to the trek home as
-a grudging compromise.
+the heroes. And before you ask,
+the answer is no; you
+can’t just solve this with said: “I hold
+my nose and I get through
 ```
 
-Both are true subsequences of their page, in original order, with nothing added, and both were picked by a model from a sample of 120 drawn uniformly across the whole page.
+Both are true subsequences of their page, in original order, with nothing added, and both were picked by a model from a sample drawn uniformly across the whole page rather than from the front of an enumeration.
 
 An erasure keeps some of a source and deletes the rest. Nothing is added, nothing is reordered, and what survives stays where it was on the page. `redactor` enumerates every erasure of a page that satisfies a given form, ranks them, and renders the winner as a redacted screenshot.
 
