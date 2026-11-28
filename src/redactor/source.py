@@ -76,7 +76,7 @@ def screenshot(url: str, png: Path, width: int = 1000, height: int = 1500,
     ]
     if full_page:
         args.append("--screenshot-format=png")
-    subprocess.run(args + [url], check=False, capture_output=True, timeout=180)
+    subprocess.run([*args, url], check=False, capture_output=True, timeout=180)
     if not png.exists():
         raise RuntimeError(f"screenshot failed for {url}")
     return png
@@ -90,8 +90,8 @@ def find_chrome() -> str | None:
     snap daemon is absent, such as a container.
     """
     for pattern in ("chromium-*/chrome-linux*/chrome",
-                    "chromium_headless_shell-*/chrome-headless-shell-linux*"
-                    "/chrome-headless-shell"):
+                    ("chromium_headless_shell-*/chrome-headless-shell-linux*"
+                    "/chrome-headless-shell")):
         for hit in sorted(Path.home().glob(f".cache/ms-playwright/{pattern}")):
             if hit.exists():
                 return str(hit)
@@ -108,8 +108,9 @@ def find_chrome() -> str | None:
 
 
 def _runnable(exe: str) -> bool:
+    # A binary that cannot report a version is answer enough on its own.
     probe = subprocess.run([exe, "--version"], capture_output=True, text=True,
-                           errors="replace", timeout=30)
+                           errors="replace", timeout=30, check=False)
     return "snap" not in (probe.stdout + probe.stderr).lower()
 
 
@@ -160,7 +161,8 @@ def page_html(url: str, chrome: str | None = None, timeout: int = 60) -> str | N
             [exe, "--headless=new", "--disable-gpu", "--no-sandbox",
              f"--user-agent={UA}", "--virtual-time-budget=15000",
              "--dump-dom", url],
-            capture_output=True, text=True, errors="replace", timeout=timeout)
+            capture_output=True, text=True, errors="replace",
+            timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout or None
@@ -190,7 +192,7 @@ def from_image(png: Path, min_conf: float = MIN_CONF,
     # raw bytes on some inputs.
     proc = subprocess.run(
         ["tesseract", str(png), "stdout", "tsv"],
-        capture_output=True, text=True, errors="replace",
+        capture_output=True, text=True, errors="replace", check=False,
     )
     out = proc.stdout
     if out.count("\n") < 2:
@@ -213,7 +215,7 @@ def _in_article(words: list[Word], pairs: set[tuple[str, str]]) -> list[Word]:
     for i in range(len(words) - 1):
         if (bare[i], bare[i + 1]) in pairs:
             keep[i] = keep[i + 1] = True
-    return [w for w, k in zip(words, keep) if k]
+    return [w for w, k in zip(words, keep, strict=False) if k]
 
 
 def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:

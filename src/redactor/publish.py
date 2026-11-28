@@ -23,7 +23,7 @@ import base64
 import json
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 GATEWAY = "https://api.sprites.dev/v1/gateway/github"
@@ -89,7 +89,7 @@ def publish(connection: str, repo: str, *, url: str, poem: str, form: str,
             pool: int, note: str = "", image: Path | None = None,
             stamp: str | None = None, via: str = "") -> dict[str, str]:
     """Write one erasure to the repo. Returns the URLs written."""
-    stamp = stamp or datetime.now(timezone.utc).strftime("%Y-%m-%d-%H%M%S")
+    stamp = stamp or datetime.now(UTC).strftime("%Y-%m-%d-%H%M%S")
     folder = f"erasures/{stamp}"
     written: dict[str, str] = {}
 
@@ -151,14 +151,13 @@ def _prepend_gallery(connection: str, repo: str, *, stamp: str, url: str,
         raise RuntimeError(
             "GALLERY.md is too large for the contents API to return inline; "
             "refusing to rewrite it from scratch")
-    if body.startswith(GALLERY_HEAD):
-        body = body[len(GALLERY_HEAD):]
+    body = body.removeprefix(GALLERY_HEAD)
 
     entry = [f"## {stamp}", "", "```", poem, "```", ""]
     if image_url:
         entry += [f"![erasure]({image_url})", ""]
-    entry += [f"{form}, from <{url}>. "
-              f"[Full entry](https://github.com/{repo}/tree/main/{folder})", "", "---", ""]
+    entry += [(f"{form}, from <{url}>. "
+              f"[Full entry](https://github.com/{repo}/tree/main/{folder})"), "", "---", ""]
 
     put_file(connection, repo, "GALLERY.md",
              (GALLERY_HEAD + "\n".join(entry) + body).encode(),

@@ -176,7 +176,7 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
             try:
                 page.add_script_tag(url=READABILITY_CDN)
                 page.evaluate(MARK_ARTICLE)
-            except Exception:
+            except Exception:  # noqa: BLE001 - any CDN failure reads on
                 pass             # a page that blocks the CDN still gets read
             raw = page.evaluate(EXTRACT)
             title = page.title()
@@ -186,7 +186,7 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
                 return None
             clip = _clip(kept, width)
             page.screenshot(path=str(png), full_page=True, clip=clip)
-        except Exception:
+        except Exception:  # noqa: BLE001 - a browser fails unpredictably
             browser.close()
             return None
         browser.close()
@@ -312,7 +312,7 @@ def _clip(kept, width: int) -> dict:
             "height": min(bottom - top, MAX_CAPTURE)}
 
 
-def named_section(read: "Read", start: str, cap: int = 4000):
+def named_section(read: Read, start: str, cap: int = 4000):
     """The part of a page that begins at `start` and ends where it does.
 
     `slice_between` with no end marker runs to the end of the document, which
@@ -343,7 +343,7 @@ def named_section(read: "Read", start: str, cap: int = 4000):
     return chosen[:cap]
 
 
-def largest_section(read: "Read", floor: int = 150):
+def largest_section(read: Read, floor: int = 150):
     """The longest run of words under one heading.
 
     Preferred over truncating a long page, which cuts wherever the count runs
@@ -355,7 +355,7 @@ def largest_section(read: "Read", floor: int = 150):
     if not read.sections or len(read.words) < floor * 2:
         return read.words
     runs: dict[int, list] = {}
-    for word, sec in zip(read.words, read.sections):
+    for word, sec in zip(read.words, read.sections, strict=False):
         runs.setdefault(sec, []).append(word)
     best = max(runs.values(), key=len)
     return best if len(best) >= floor else read.words

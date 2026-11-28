@@ -18,8 +18,8 @@ unless announced, and a reader sees this one without being told.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 VOWELS = frozenset("aeiou")
 _CLEAN = re.compile(r"[^A-Za-z']")
@@ -79,7 +79,7 @@ def abecedarian() -> Shape:
     return Shape(
         name="abecedarian", rule="initials advance through the alphabet",
         visible=True,
-        allows=lambda w: bool(w),
+        allows=bool,
         follows=lambda prev, w: w[:1].lower() == chr(ord(prev[:1].lower()) + 1),
         starts=lambda w: w[:1].lower() == "a",
     )
@@ -89,7 +89,7 @@ def chain() -> Shape:
     return Shape(
         name="chain", rule="each word starts with the last letter of the last",
         visible=False,
-        allows=lambda w: bool(w),
+        allows=bool,
         follows=lambda prev, w: w[:1].lower() == prev[-1:].lower(),
     )
 

@@ -30,7 +30,7 @@ def _region(name: str) -> str:
     text = README.read_text()
     found = re.search(
         re.escape(f"<!-- measured:{name} -->") + r"(.*?)"
-        + re.escape(f"<!-- /measured:{name} -->"), text, re.S)
+        + re.escape(f"<!-- /measured:{name} -->"), text, re.DOTALL)
     assert found, f"README has no region marked measured:{name}"
     return found.group(1)
 

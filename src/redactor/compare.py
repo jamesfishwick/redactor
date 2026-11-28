@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .candidates import Candidate, Enumerator
 from . import rank
+from .candidates import Candidate, Enumerator
 
 
 @dataclass

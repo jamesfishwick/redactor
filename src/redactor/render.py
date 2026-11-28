@@ -115,8 +115,11 @@ def column(words, margin: int = MARGIN, keep: list[int] | None = None,
 
 
 def page_height(png: Path, magick: str = "magick") -> int:
+    # Judged by what it printed. A height that will not parse is reported as
+    # zero either way, so the exit code adds nothing.
     out = subprocess.run([magick, "identify", "-format", "%h", str(png)],
-                         capture_output=True, text=True, errors="replace")
+                         capture_output=True, text=True, errors="replace",
+                         check=False)
     try:
         return int((out.stdout or "").strip().splitlines()[0])
     except (AttributeError, ValueError, IndexError):
@@ -169,11 +172,11 @@ def fluid_color(bg, desaturate: float = 0.25, lighten: float = 0.12) -> str:
     blank where its words were taken out. It cannot look painted over the
     words that stayed.
     """
-    h, l, s = colorsys.rgb_to_hls(*(c / 255 for c in bg))
+    h, lum, s = colorsys.rgb_to_hls(*(c / 255 for c in bg))
     s *= desaturate
-    l = min(1.0, l + lighten)
-    r, g, b = colorsys.hls_to_rgb(h, l, s)
-    return "#%02x%02x%02x" % tuple(round(c * 255) for c in (r, g, b))
+    lum = min(1.0, lum + lighten)
+    r, g, b = colorsys.hls_to_rgb(h, lum, s)
+    return "#{:02x}{:02x}{:02x}".format(*tuple(round(c * 255) for c in (r, g, b)))
 
 
 def _run(cmd: list[str]) -> None:
@@ -473,7 +476,7 @@ def _close_the_gaps(rendered: Path, words, keep, box, magick: str) -> Path:
         strips.append(str(strip))
 
     if len(strips) > 1:
-        _run([magick] + strips + ["-append", str(rendered)])
+        _run([magick, *strips, "-append", str(rendered)])
     for f in work.glob("_band*.png"):
         f.unlink(missing_ok=True)
     return rendered

@@ -17,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import agent, publish, rank, render, sources
+from . import agent, publish, rank, render
 
 
 def build_parser() -> argparse.ArgumentParser:

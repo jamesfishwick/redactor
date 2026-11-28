@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import candidates as cand
-from . import agent, compare, ladder, publish, rank, render, shapes, source, tagging
+from . import compare, ladder, publish, rank, render, shapes, source, tagging
 from .prosody import FORMS, METERS
 
 
@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="redactor", description=__doc__)
     p.add_argument("url")
     p.add_argument("-f", "--form", default="auto",
-                   choices=["auto"] + sorted(FORMS),
+                   choices=["auto", *sorted(FORMS)],
                    help="'auto' climbs to the hardest form the page admits")
     p.add_argument("-s", "--shape",
                    help="word-level form instead of a syllabic one: "

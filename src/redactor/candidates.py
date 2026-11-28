@@ -19,9 +19,9 @@ triples were learned from.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 
-from .prosody import METERS, rhyme_part, scans, stress, syllables
+from .prosody import rhyme_part, scans, stress, syllables
 
 
 @dataclass(frozen=True)
@@ -92,7 +92,7 @@ class Enumerator:
     def count(self) -> int:
         n, form, syl = len(self.w), self.form, self.syl
 
-        @lru_cache(maxsize=None)
+        @cache
         def walk(i, line, used, p1, p2, runs, prev):
             if line == len(form):
                 return 1 if used == 0 else 0
@@ -150,7 +150,7 @@ class Enumerator:
             return False
         return all(
             scans([self.w[i].text for i in line], pattern)
-            for line, pattern in zip(candidate.lines, self.meter)
+            for line, pattern in zip(candidate.lines, self.meter, strict=False)
         )
 
 
@@ -206,33 +206,33 @@ class Space:
         self.pattern = tuple(meter.split("/")) if meter else None
         if self.pattern:
             self.stress = []
-            for word, n in zip(words, self.syl):
+            for word, n in zip(words, self.syl, strict=False):
                 st = stress(word.text)
                 self.stress.append(st if st and len(st) == n else "?" * n)
         self._table = None
 
-    def _closes(self, i, l, u, s) -> bool:
-        """May word i end line l, given what that line has to rhyme with?"""
-        if not self.scheme or u + s != self.form[l]:
+    def _closes(self, i, ln, u, s) -> bool:
+        """May word i end line ln, given what that line has to rhyme with?"""
+        if not self.scheme or u + s != self.form[ln]:
             return True
-        letter = self.scheme[l] if l < len(self.scheme) else "."
+        letter = self.scheme[ln] if ln < len(self.scheme) else "."
         if letter == ".":
             return True
         want = self.parts.get(letter)
         return want is not None and self.ends[i] == want
 
-    def _fits(self, i, l, u) -> bool:
+    def _fits(self, i, ln, u) -> bool:
         """Does word i's stress match the pattern at this offset?"""
         if self.pattern is None:
             return True
-        pat = self.pattern[l]
+        pat = self.pattern[ln]
         st = self.stress[i]
         if u + len(st) > len(pat):
             return False
-        return all(a == "?" or a == b for a, b in zip(st, pat[u:u + len(st)]))
+        return all(a == "?" or a == b for a, b in zip(st, pat[u:u + len(st)], strict=False))
 
-    def _idx(self, i, l, u, r, p):
-        return ((((i * (len(self.form) + 1) + l) * self._U + u)
+    def _idx(self, i, ln, u, r, p):
+        return ((((i * (len(self.form) + 1) + ln) * self._U + u)
                  * self._R + r) * 2 + p)
 
     def _build(self):
@@ -249,28 +249,28 @@ class Space:
         table = [0] * ((n + 1) * (L + 1) * U * R * 2)
 
         for i in range(n, -1, -1):
-            for l in range(L, -1, -1):
+            for ln in range(L, -1, -1):
                 for u in range(U - 1, -1, -1):
                     for r in range(R):
                         for p in (0, 1):
-                            at = self._idx(i, l, u, r, p)
-                            if l == L:
+                            at = self._idx(i, ln, u, r, p)
+                            if ln == L:
                                 table[at] = 1 if u == 0 else 0
                                 continue
-                            if u == form[l]:
-                                table[at] = table[self._idx(i, l + 1, 0, r, p)]
+                            if u == form[ln]:
+                                table[at] = table[self._idx(i, ln + 1, 0, r, p)]
                                 continue
                             if i == n:
                                 table[at] = 0
                                 continue
-                            total = table[self._idx(i + 1, l, u, r, 0)]
+                            total = table[self._idx(i + 1, ln, u, r, 0)]
                             s = syl[i]
                             joins = p == 1 and i > 0 and line[i - 1] == line[i]
                             nr = r + (0 if joins else 1)
-                            if (u + s <= form[l] and nr <= self.max_runs
-                                    and self._fits(i, l, u)
-                                    and self._closes(i, l, u, s)):
-                                total += table[self._idx(i + 1, l, u + s, nr, 1)]
+                            if (u + s <= form[ln] and nr <= self.max_runs
+                                    and self._fits(i, ln, u)
+                                    and self._closes(i, ln, u, s)):
+                                total += table[self._idx(i + 1, ln, u + s, nr, 1)]
                             table[at] = total
         self._table = table
 
@@ -295,23 +295,26 @@ class Space:
         n, form, syl, line = len(self.w), self.form, self.syl, self.line
         t, out = self._table, []
         for _ in range(k):
-            i, l, u, r, p = 0, 0, 0, 0, 0
+            i, ln, u, r, p = 0, 0, 0, 0, 0
             lines, cur = [], []
-            while l < len(form):
-                if u == form[l]:
-                    lines.append(tuple(cur)); cur = []
-                    l, u = l + 1, 0
+            while ln < len(form):
+                if u == form[ln]:
+                    lines.append(tuple(cur))
+                    cur = []
+                    ln, u = ln + 1, 0
                     continue
-                skip = t[self._idx(i + 1, l, u, r, 0)] if i < n else 0
+                skip = t[self._idx(i + 1, ln, u, r, 0)] if i < n else 0
                 s = syl[i] if i < n else 0
                 joins = p == 1 and i > 0 and line[i - 1] == line[i]
                 nr = r + (0 if joins else 1)
-                keep = (t[self._idx(i + 1, l, u + s, nr, 1)]
-                        if (i < n and u + s <= form[l] and nr <= self.max_runs
-                            and self._fits(i, l, u)
-                            and self._closes(i, l, u, s)) else 0)
+                keep = (t[self._idx(i + 1, ln, u + s, nr, 1)]
+                        if (i < n and u + s <= form[ln] and nr <= self.max_runs
+                            and self._fits(i, ln, u)
+                            and self._closes(i, ln, u, s)) else 0)
                 if keep and rng.random() < keep / (keep + skip):
-                    cur.append(i); u += s; r, p = nr, 1
+                    cur.append(i)
+                    u += s
+                    r, p = nr, 1
                 else:
                     p = 0
                 i += 1

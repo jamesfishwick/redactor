@@ -23,7 +23,7 @@ import random
 import re
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 FEED = "https://feeds.feedburner.com/Metafilter"
 WIKI = "https://en.wikipedia.org/api/rest_v1/feed/featured"
@@ -34,7 +34,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 BARREN = re.compile(
     r"(youtube\.com|youtu\.be|vimeo\.com|twitter\.com|x\.com|bsky\.app|"
     r"instagram\.com|tiktok\.com|soundcloud\.com|spotify\.com|"
-    r"\.(pdf|jpg|jpeg|png|gif|mp3|mp4|zip)$)", re.I)
+    r"\.(pdf|jpg|jpeg|png|gif|mp3|mp4|zip)$)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -54,12 +54,12 @@ def metafilter_links(limit: int = 40) -> list[Candidate]:
     """Outbound links from the current MetaFilter feed, best first."""
     try:
         raw = _get(FEED)
-    except Exception:
+    except OSError:
         return []
     out: list[Candidate] = []
-    for item in re.findall(r"<item>(.*?)</item>", raw, re.S):
-        title = re.search(r"<title>(.*?)</title>", item, re.S)
-        body = re.search(r"<description>(.*?)</description>", item, re.S)
+    for item in re.findall(r"<item>(.*?)</item>", raw, re.DOTALL):
+        title = re.search(r"<title>(.*?)</title>", item, re.DOTALL)
+        body = re.search(r"<description>(.*?)</description>", item, re.DOTALL)
         if not body:
             continue
         via = html.unescape(title.group(1)).strip() if title else "MetaFilter"
@@ -75,10 +75,10 @@ def metafilter_links(limit: int = 40) -> list[Candidate]:
 
 def wikipedia_featured(day: datetime | None = None) -> Candidate | None:
     """Today's featured article. The fallback that never fails."""
-    day = day or datetime.now(timezone.utc)
+    day = day or datetime.now(UTC)
     try:
         payload = json.loads(_get(f"{WIKI}/{day.strftime('%Y/%m/%d')}"))
-    except Exception:
+    except (OSError, ValueError):
         return None
     tfa = payload.get("tfa") or {}
     page = (tfa.get("content_urls") or {}).get("desktop", {}).get("page")
