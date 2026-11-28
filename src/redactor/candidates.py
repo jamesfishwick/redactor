@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 
-from .prosody import METERS, scans, stress, syllables
+from .prosody import METERS, rhyme_part, scans, stress, syllables
 
 
 @dataclass(frozen=True)
@@ -181,7 +181,8 @@ class Space:
     # already admit erasures in the hundreds of millions.
     MAX_WORDS = 15000
 
-    def __init__(self, words, form, max_runs: int = 2, meter: str | None = None):
+    def __init__(self, words, form, max_runs: int = 2, meter: str | None = None,
+                 scheme: str | None = None, parts: dict | None = None):
         if len(words) > self.MAX_WORDS:
             words = words[:self.MAX_WORDS]
         self.w = words
@@ -198,6 +199,14 @@ class Space:
         # already in the line, so it is also the offset into the line's
         # pattern, and a word's own stress has to match the slice starting
         # there. A word CMU does not know contributes wildcards.
+        # Rhyme is a constraint on the last word of a line, so the state does
+        # not grow for it: the class each line must end on is fixed before the
+        # table is built, and checked when a line completes. Enumerating one
+        # table per candidate class is what makes that affordable.
+        self.scheme = scheme
+        self.parts = parts or {}
+        if scheme:
+            self.ends = [rhyme_part(w.text) for w in words]
         self.pattern = tuple(meter.split("/")) if meter else None
         if self.pattern:
             self.stress = []
@@ -205,6 +214,16 @@ class Space:
                 st = stress(word.text)
                 self.stress.append(st if st and len(st) == n else "?" * n)
         self._table = None
+
+    def _closes(self, i, l, u, s) -> bool:
+        """May word i end line l, given what that line has to rhyme with?"""
+        if not self.scheme or u + s != self.form[l]:
+            return True
+        letter = self.scheme[l] if l < len(self.scheme) else "."
+        if letter == ".":
+            return True
+        want = self.parts.get(letter)
+        return want is not None and self.ends[i] == want
 
     def _fits(self, i, l, u) -> bool:
         """Does word i's stress match the pattern at this offset?"""
@@ -253,7 +272,8 @@ class Space:
                             joins = p == 1 and i > 0 and line[i - 1] == line[i]
                             nr = r + (0 if joins else 1)
                             if (u + s <= form[l] and nr <= self.max_runs
-                                    and self._fits(i, l, u)):
+                                    and self._fits(i, l, u)
+                                    and self._closes(i, l, u, s)):
                                 total += table[self._idx(i + 1, l, u + s, nr, 1)]
                             table[at] = total
         self._table = table
@@ -292,7 +312,8 @@ class Space:
                 nr = r + (0 if joins else 1)
                 keep = (t[self._idx(i + 1, l, u + s, nr, 1)]
                         if (i < n and u + s <= form[l] and nr <= self.max_runs
-                            and self._fits(i, l, u)) else 0)
+                            and self._fits(i, l, u)
+                            and self._closes(i, l, u, s)) else 0)
                 if keep and rng.random() < keep / (keep + skip):
                     cur.append(i); u += s; r, p = nr, 1
                 else:

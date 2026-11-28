@@ -24,15 +24,37 @@ import time
 from dataclasses import dataclass
 
 from .candidates import Enumerator, Space
-from .prosody import FORMS, METERS, scans
+from .prosody import (FORMS, METERS, SCHEMES, normalize,
+                      rhyme_classes, scans)
 
 # hardest first
 RUNGS: tuple[str, ...] = (
-    "ballad", "pentameter", "tetrameter",
+    "quatrain", "couplet", "ballad", "pentameter", "tetrameter",
     "fib", "cinquain", "tanka", "lune", "haiku",
 )
 
 FALLBACK_SHAPES: tuple[str, ...] = ("snowball", "abecedarian", "univocalic:a")
+
+
+def _distinct(candidate, words, scheme: str) -> bool:
+    """Do the lines sharing a scheme letter end on different words?
+
+    A word rhymes with itself, so the table cannot tell `know` from `know`,
+    and a couplet closing twice on the same word turns out to be the most
+    common poem in the space. Identity is a property of the finished poem
+    rather than of any one line, so it filters the sample the way the stress
+    evidence check does. The pool reported alongside the survivors is the
+    table's own count and so includes the poems this rejects.
+    """
+    seen: dict[str, set[str]] = {}
+    for letter, line in zip(scheme, candidate.lines):
+        if letter == "." or not line:
+            continue
+        word = normalize(words[line[-1]].text)
+        if word in seen.setdefault(letter, set()):
+            return False
+        seen[letter].add(word)
+    return True
 
 
 @dataclass
@@ -44,7 +66,8 @@ class Rung:
 
 
 def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
-          budget_s: float = 90.0, rng=None) -> Rung | None:
+          rhyme_tries: int = 25, budget_s: float = 90.0,
+          rng=None) -> Rung | None:
     """Return the hardest form this page admits, with candidates to choose from.
 
     The candidates are drawn uniformly from the whole space rather than taken
@@ -61,37 +84,78 @@ def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
     would have succeeded instantly, which is the opposite of dropping to an
     easier form.
     """
+    classes = None
     for name in RUNGS:
         deadline = time.monotonic() + budget_s
         meter = METERS.get(name)
-        space = Space(words, FORMS[name], max_runs=max_runs, meter=meter)
-        pool = space.count()
-        if pool < want:
-            continue
-
-        # Stress is enforced while the table is built, so every draw already
-        # scans and none are thrown away. What the table cannot see is whether
-        # a line offers any evidence that it scans: a line of ten monosyllables
-        # matches any pattern. That is a property of the finished line, so it
-        # filters the sample, which is small and costs nothing to walk again.
+        scheme = SCHEMES.get(name)
         patterns = meter.split("/") if meter else None
-        if not patterns:
-            # Every draw is usable, so there is nothing for a budget to bound.
-            # Gating this too meant a spent budget skipped the easy rungs as
-            # well, and the climb returned nothing from a page that would have
-            # given a haiku at once.
-            drawn = space.sample(sample, rng)
-        else:
-            drawn, tries = [], 0
-            while (len(drawn) < sample and tries < max_draws
+
+        def draw(space):
+            """Sample this space and keep the poems the table cannot vet.
+
+            Stress is enforced while the table is built, so every draw already
+            scans and none are thrown away. What the table cannot see is
+            whether a line offers any evidence that it scans: a line of ten
+            monosyllables matches any pattern. Nor can it see that two rhymed
+            lines closed on the same word. Both are properties of the finished
+            poem, so they filter the sample, which is small and costs nothing
+            to walk again.
+            """
+            def usable(c):
+                if patterns and not all(
+                        scans([words[i].text for i in line], pat)
+                        for line, pat in zip(c.lines, patterns)):
+                    return False
+                return not scheme or _distinct(c, words, scheme)
+
+            if not patterns and not scheme:
+                # Every draw is usable, so there is nothing for a budget to
+                # bound. Gating this too meant a spent budget skipped the easy
+                # rungs as well, and the climb returned nothing from a page
+                # that would have given a haiku at once.
+                return space.sample(sample, rng)
+            kept, tries = [], 0
+            while (len(kept) < sample and tries < max_draws
                    and time.monotonic() < deadline):
                 batch = space.sample(min(sample * 2, max_draws - tries), rng)
                 if not batch:
                     break
                 tries += len(batch)
-                drawn += [c for c in batch
-                          if all(scans([words[i].text for i in line], pat)
-                                 for line, pat in zip(c.lines, patterns))]
+                kept += [c for c in batch if usable(c)]
+            return kept
+
+        if scheme:
+            # One table per candidate rhyme class, biggest first. A class with
+            # more distinct words offers more ways to close a line, so it is
+            # likelier to admit anything at all, and most classes admit none.
+            # A class is only spent once its poems have been drawn and vetted,
+            # because a table that counts in the thousands can still hold
+            # nothing but a word rhymed against itself.
+            if classes is None:
+                classes = sorted(rhyme_classes(words).items(),
+                                 key=lambda kv: -len(kv[1]))[:rhyme_tries]
+            space = drawn = None
+            for part, _members in classes:
+                trial = Space(words, FORMS[name], max_runs=max_runs,
+                              meter=meter, scheme=scheme, parts={"A": part})
+                if trial.count() >= want:
+                    got = draw(trial)
+                    if len(got) >= want:
+                        space, drawn = trial, got
+                        break
+                if time.monotonic() >= deadline:
+                    break
+            if space is None:
+                continue
+            pool = space.count()
+        else:
+            space = Space(words, FORMS[name], max_runs=max_runs, meter=meter)
+            pool = space.count()
+            if pool < want:
+                continue
+            drawn = draw(space)
+
         drawn = drawn[:sample]
         if len(drawn) >= want:
             return Rung(name, meter is not None, pool, drawn)
@@ -99,6 +163,7 @@ def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
 
 
 def describe(rung: Rung) -> str:
-    kind = "metrical" if rung.metered else "syllabic"
+    kind = "rhymed" if SCHEMES.get(rung.form) else (
+        "metrical" if rung.metered else "syllabic")
     return (f"{rung.form} ({kind}), {rung.pool:,} erasures of this page "
             f"satisfy it")

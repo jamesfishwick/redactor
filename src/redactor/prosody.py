@@ -42,6 +42,36 @@ def stress(word: str) -> str | None:
     return "?" if len(s) == 1 else s.replace("2", "?")
 
 
+@lru_cache(maxsize=None)
+def rhyme_part(word: str) -> str | None:
+    """What a word rhymes on: everything from its last stressed vowel.
+
+    Exact equality is the test, so `home` and `roam` agree on OW1 M while
+    `rations` and `nations` do not, their stressed vowels differing.
+    """
+    w = normalize(word)
+    phones = pronouncing.phones_for_word(w)
+    return pronouncing.rhyming_part(phones[0]) if phones else None
+
+
+def rhyme_classes(words, least: int = 3) -> dict[str, set[str]]:
+    """Rhyme classes on this page, keyed by part, with their distinct words.
+
+    Function words are dropped first. The largest classes on any English page
+    are `the`, `to`, `and` and `a`, and a couplet closing on `the` and `the`
+    rhymes with itself rather than rhyming.
+    """
+    found: dict[str, set[str]] = {}
+    for w in words:
+        text = normalize(getattr(w, "text", w))
+        if not text or text in FUNCTION_WORDS:
+            continue
+        part = rhyme_part(text)
+        if part:
+            found.setdefault(part, set()).add(text)
+    return {k: v for k, v in found.items() if len(v) >= least}
+
+
 FORMS: dict[str, tuple[int, ...]] = {
     "haiku": (5, 7, 5),
     "tanka": (5, 7, 5, 7, 7),
@@ -51,6 +81,16 @@ FORMS: dict[str, tuple[int, ...]] = {
     "pentameter": (10,),
     "tetrameter": (8,),
     "ballad": (8, 6, 8, 6),
+    "couplet": (10, 10),
+    "quatrain": (8, 6, 8, 6),
+}
+
+# Which lines have to rhyme with which. A letter repeated is a rhyme, a dot
+# is a line free to end anywhere. The hardest thing the ladder can ask for,
+# since it constrains syllables, stress and the last word all at once.
+SCHEMES: dict[str, str] = {
+    "couplet": "AA",
+    "quatrain": ".A.A",
 }
 
 # A syllable count is not a meter. These forms additionally require the line's
@@ -60,6 +100,8 @@ METERS: dict[str, str] = {
     "pentameter": "0101010101",
     "tetrameter": "01010101",
     "ballad": "01010101/010101/01010101/010101",
+    "couplet": "0101010101/0101010101",
+    "quatrain": "01010101/010101/01010101/010101",
 }
 
 

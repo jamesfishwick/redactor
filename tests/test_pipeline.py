@@ -164,7 +164,10 @@ class TestShapes:
 class TestLadder:
     def test_hardest_form_comes_first(self):
         from redactor.ladder import RUNGS
-        assert RUNGS[0] == "ballad"
+        # rhymed forms sit above metrical ones, metrical above syllabic
+        assert RUNGS[0] == "quatrain"
+        assert RUNGS.index("couplet") < RUNGS.index("ballad")
+        assert RUNGS.index("ballad") < RUNGS.index("pentameter")
         assert RUNGS.index("pentameter") < RUNGS.index("haiku")
 
     def test_climb_prefers_a_metrical_form_when_one_fits(self):
