@@ -247,7 +247,7 @@ class TestTsvParsing:
         got = source.words_from_tsv(self.tsv(
             ('"Did', 10, 99), ("afterward", 1492, 99)))
         assert [w.text for w in got] == ['"Did', "afterward"]
-        assert max((w.top for w in got), default=None) == 1492
+        assert max(w.top for w in got) == 1492
 
     def test_an_unbalanced_quote_loses_nothing(self):
         """Real pages open a quote that the screenshot cuts off before it
@@ -325,6 +325,22 @@ class TestTsvParsing:
 
     def test_degenerate_input_yields_no_words(self):
         assert source.words_from_tsv(self.HEADER + "\n") == []
+
+    def test_an_unparseable_conf_drops_the_row(self):
+        """The one column wrapped in a try and except, so it loses a word in
+        silence where its neighbours would raise."""
+        rows = (self.HEADER + "\n"
+                + "5\t1\t1\t1\t1\t1\t50\t10\t40\t12\t99\tgood\n"
+                + "5\t1\t1\t1\t1\t2\t99\t10\t40\t12\tNOPE\tvanishes\n")
+        assert [w.text for w in source.words_from_tsv(rows)] == ["good"]
+
+    def test_unparseable_geometry_raises(self):
+        """The asymmetry with conf above is not a design, it is where the
+        try and except happens to sit."""
+        rows = (self.HEADER + "\n"
+                + "5\t1\t1\t1\t1\t1\tXX\t10\t40\t12\t99\tboom\n")
+        with pytest.raises(ValueError):
+            source.words_from_tsv(rows)
 
     def test_a_stream_with_no_header_is_refused(self):
         """DictReader takes the first line as the header, so a caller that

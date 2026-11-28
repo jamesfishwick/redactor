@@ -109,11 +109,7 @@ MIN_CONF = 55.0
 
 
 def from_image(png: Path, min_conf: float = MIN_CONF) -> list[Word]:
-    """OCR the rendered page into positioned words.
-
-    A row short of its columns does not raise, it is dropped on the empty text
-    check, so a short page and a truncated stream look alike.
-    """
+    """OCR the rendered page into positioned words."""
     # Tesseract exits non-zero on Leptonica warnings it has already recovered
     # from, so the exit code says nothing about whether the TSV is usable.
     # Judge it by whether rows came back, and decode leniently: stderr carries
@@ -150,6 +146,11 @@ def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:
     QUOTE_NONE is there, and is set as a tripwire: remove QUOTE_NONE and
     DictReader raises at construction, where it would otherwise go on parsing
     with quoting restored.
+
+    Malformed input is handled unevenly, by column. A row short of its columns
+    loses its text and is dropped, as is a row whose conf will not parse.
+    Unparseable geometry raises instead, so a truncated stream can either come
+    back short or blow up, depending on where it was cut.
     """
     reader = csv.DictReader(io.StringIO(tsv), delimiter="\t",
                             quoting=csv.QUOTE_NONE, quotechar=None)
