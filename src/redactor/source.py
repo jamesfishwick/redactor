@@ -111,9 +111,8 @@ MIN_CONF = 55.0
 def from_image(png: Path, min_conf: float = MIN_CONF) -> list[Word]:
     """OCR the rendered page into positioned words.
 
-    Parse errors propagate out of this function and nothing here catches them.
-    A row short of its columns does not raise at all, it is dropped on the
-    empty text check, so a short page and a truncated stream look alike.
+    A row short of its columns does not raise, it is dropped on the empty text
+    check, so a short page and a truncated stream look alike.
     """
     # Tesseract exits non-zero on Leptonica warnings it has already recovered
     # from, so the exit code says nothing about whether the TSV is usable.
