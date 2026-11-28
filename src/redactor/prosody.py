@@ -8,7 +8,7 @@ often enough to matter: it reports "about" and "ago" as one syllable.
 from __future__ import annotations
 
 import re
-from functools import lru_cache
+from functools import cache
 
 import pronouncing
 
@@ -19,7 +19,7 @@ def normalize(word: str) -> str:
     return _WORD.sub("", word).lower()
 
 
-@lru_cache(maxsize=None)
+@cache
 def syllables(word: str) -> int:
     """Syllable count, or a vowel-group estimate for words CMU doesn't know."""
     w = normalize(word)
@@ -31,7 +31,7 @@ def syllables(word: str) -> int:
     return max(1, len(re.findall(r"[aeiouy]+", w)))
 
 
-@lru_cache(maxsize=None)
+@cache
 def stress(word: str) -> str | None:
     """CMU stress digits. Monosyllables return '?' because meter decides them."""
     w = normalize(word)
@@ -42,7 +42,7 @@ def stress(word: str) -> str | None:
     return "?" if len(s) == 1 else s.replace("2", "?")
 
 
-@lru_cache(maxsize=None)
+@cache
 def rhyme_part(word: str) -> str | None:
     """What a word rhymes on: everything from its last stressed vowel.
 
@@ -109,14 +109,7 @@ METERS: dict[str, str] = {
 # unstressed rejects "Shall I compare thee to a summer's day", because English
 # stress is positional and `to`, `a` and `be` take it depending on where they
 # fall. Counting them is safe; scanning with them is not.
-FUNCTION_WORDS = frozenset("""
-a an the this that these those my your his her its our their
-of to in on at by for from with into onto upon as than
-and or but nor so yet if though
-is are was were be been am do does did has have had
-will would shall should may might must can could
-i you he she it we they me him them us
-""".split())
+FUNCTION_WORDS = frozenset(["a", "an", "the", "this", "that", "these", "those", "my", "your", "his", "her", "its", "our", "their", "of", "to", "in", "on", "at", "by", "for", "from", "with", "into", "onto", "upon", "as", "than", "and", "or", "but", "nor", "so", "yet", "if", "though", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "has", "have", "had", "will", "would", "shall", "should", "may", "might", "must", "can", "could", "i", "you", "he", "she", "it", "we", "they", "me", "him", "them", "us"])
 
 
 def content_words(words: list[str]) -> int:
@@ -157,7 +150,7 @@ def scans(words: list[str], pattern: str, min_fixed: int = 2,
         built += s
     if len(built) != len(pattern):
         return False
-    if not all(b == "?" or b == p for b, p in zip(built, pattern)):
+    if not all(b == "?" or b == p for b, p in zip(built, pattern, strict=False)):
         return False
     fixed = len(built) - built.count("?")
     return fixed >= min_fixed or content_words(words) >= min_content

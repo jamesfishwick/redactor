@@ -14,21 +14,18 @@ and the display the same artifact.
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.request
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import sys
-
 from . import publish, sources
 
-URL_IN_TITLE = re.compile(r"erase:\s*(https?://\S+)", re.I)
+URL_IN_TITLE = re.compile(r"erase:\s*(https?://\S+)", re.IGNORECASE)
 # `erase: <url> section: § 107` asks for one part of a long document. Without
 # it a long page is reduced to its longest section, which on Title 17 chapter 1
 # is 17,754 words of royalty provisions rather than the 184 about fair use.
-SECTION_IN_TITLE = re.compile(r"section:\s*(.+?)\s*$", re.I)
+SECTION_IN_TITLE = re.compile(r"section:\s*(.+?)\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -54,7 +51,7 @@ def open_requests(connection: str, repo: str) -> list[Request]:
         found = URL_IN_TITLE.search(issue.get("title") or "")
         if not found:
             continue
-        if any(l.get("name") == DECLINED for l in issue.get("labels") or []):
+        if any(lab.get("name") == DECLINED for lab in issue.get("labels") or []):
             continue
         title = issue.get("title") or ""
         named = SECTION_IN_TITLE.search(title)
@@ -175,7 +172,7 @@ def erase_page(url: str, *, out: Path, runs: int = 2,
                 return None
             if words is None or len(ocr) > len(words):
                 words = ocr
-        except Exception:
+        except Exception:  # noqa: BLE001 - OCR is already the fallback
             if words is None:
                 return None
     if words is None or len(words) < MIN_WORDS:

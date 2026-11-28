@@ -2,18 +2,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from redactor import source
-
 import pytest
 
-from redactor import render
+from redactor import render, source
 from redactor.candidates import Candidate, Enumerator, is_subsequence
 from redactor.prosody import syllables
 from redactor.source import Word
 
-MOBY = """Call me Ishmael Some years ago never mind how long precisely having
-little or no money in my purse and nothing particular to interest me on shore
-I thought I would sail about a little and see the watery part of the world""".split()
+MOBY = ["Call", "me", "Ishmael", "Some", "years", "ago", "never", "mind", "how", "long", "precisely", "having", "little", "or", "no", "money", "in", "my", "purse", "and", "nothing", "particular", "to", "interest", "me", "on", "shore", "I", "thought", "I", "would", "sail", "about", "a", "little", "and", "see", "the", "watery", "part", "of", "the", "world"]
 
 
 def words(tokens):
@@ -88,7 +84,7 @@ class TestCandidate:
 class TestMeter:
     def test_scans_accepts_an_iambic_line(self):
         from redactor.prosody import scans
-        line = "I never learned the names of all the birds".split()
+        line = ["I", "never", "learned", "the", "names", "of", "all", "the", "birds"]
         assert scans(line, "0101010101")
 
     def test_scans_rejects_a_trochaic_opening(self):
@@ -119,7 +115,7 @@ class TestMeter:
 class TestShapes:
     def test_snowball_grows_by_one_letter(self):
         from redactor import shapes
-        src = "a it the week Start Ollama exactly partners connector".split()
+        src = ["a", "it", "the", "week", "Start", "Ollama", "exactly", "partners", "connector"]
         keep = shapes.longest(words(src), shapes.snowball())
         lengths = [len(src[i]) for i in keep]
         assert lengths == list(range(1, len(lengths) + 1))
@@ -132,20 +128,20 @@ class TestShapes:
 
     def test_univocalic_admits_one_vowel_only(self):
         from redactor import shapes
-        src = "a an and plan start always money".split()
+        src = ["a", "an", "and", "plan", "start", "always", "money"]
         keep = shapes.longest(words(src), shapes.build("univocalic:a"))
         assert "money" not in [src[i] for i in keep]
         assert len(keep) >= 4
 
     def test_lipogram_excludes_its_letter(self):
         from redactor import shapes
-        src = "call me ishmael some years ago never".split()
+        src = ["call", "me", "ishmael", "some", "years", "ago", "never"]
         keep = shapes.longest(words(src), shapes.build("lipogram:e"))
         assert all("e" not in src[i] for i in keep)
 
     def test_abecedarian_advances_the_alphabet(self):
         from redactor import shapes
-        src = "an build computer disposable elements".split()
+        src = ["an", "build", "computer", "disposable", "elements"]
         keep = shapes.longest(words(src), shapes.abecedarian())
         initials = [src[i][0] for i in keep]
         assert initials == ["a", "b", "c", "d", "e"]
@@ -186,7 +182,7 @@ class TestLadder:
             assert counts == list(form)
             meter = METERS.get(rung.form)
             if meter:
-                for line, pattern in zip(c.lines, meter.split("/")):
+                for line, pattern in zip(c.lines, meter.split("/"), strict=False):
                     assert scans([MOBY[i] for i in line], pattern)
 
     def test_climb_gives_up_on_a_page_with_no_words(self):
@@ -197,13 +193,13 @@ class TestLadder:
 class TestScansionEvidence:
     def test_accepts_shakespeare(self):
         from redactor.prosody import scans
-        assert scans("Shall I compare thee to a summer's day".split(),
+        assert scans(["Shall", "I", "compare", "thee", "to", "a", "summer's", "day"],
                      "0101010101")
 
     def test_accepts_an_all_monosyllabic_pentameter(self):
         from redactor.prosody import scans
         # no polysyllable to offer stress evidence, but five content words
-        assert scans("When I do count the clock that tells the time".split(),
+        assert scans(["When", "I", "do", "count", "the", "clock", "that", "tells", "the", "time"],
                      "0101010101")
 
     def test_rejects_a_line_of_one_repeated_word(self):
@@ -212,25 +208,25 @@ class TestScansionEvidence:
 
     def test_rejects_a_line_of_only_function_words(self):
         from redactor.prosody import scans
-        assert not scans("of the and to in on at by for with".split(),
+        assert not scans(["of", "the", "and", "to", "in", "on", "at", "by", "for", "with"],
                          "0101010101")
 
     def test_content_words_ignores_function_words(self):
         from redactor.prosody import content_words
-        assert content_words("the clock that tells the time".split()) == 3
+        assert content_words(["the", "clock", "that", "tells", "the", "time"]) == 3
 
 
 class TestVisualRuns:
     def _laid_out(self, tokens, lines):
         """Words with explicit page-line ids, as OCR would report them."""
         from redactor.source import Word
-        return [Word(t, left=0, top=0, width=10, height=10, line=l)
-                for t, l in zip(tokens, lines)]
+        return [Word(t, left=0, top=0, width=10, height=10, line=ln)
+                for t, ln in zip(tokens, lines, strict=False)]
 
     def test_a_run_cannot_cross_a_page_line(self):
         from redactor.candidates import Enumerator
         # adjacent in reading order, but the page puts them in different blocks
-        src = "I thought I would sail about a little and see".split()
+        src = ["I", "thought", "I", "would", "sail", "about", "a", "little", "and", "see"]
         same = self._laid_out(src, ["1-1-1"] * len(src))
         split = self._laid_out(src, ["1-1-1"] * 5 + ["9-9-9"] * 5)
         assert Enumerator(same, (10,), max_runs=1).count() >= \
@@ -238,7 +234,7 @@ class TestVisualRuns:
 
     def test_one_run_stays_on_one_line(self):
         from redactor.candidates import Enumerator
-        src = "I thought I would sail about a little and see the watery part".split()
+        src = ["I", "thought", "I", "would", "sail", "about", "a", "little", "and", "see", "the", "watery", "part"]
         w = self._laid_out(src, ["a"] * 6 + ["b"] * 7)
         for c in Enumerator(w, (10,), max_runs=1).all():
             idx = c.indices()
@@ -246,7 +242,7 @@ class TestVisualRuns:
 
     def test_count_still_agrees_with_enumeration(self):
         from redactor.candidates import Enumerator
-        src = "I thought I would sail about a little and see the watery part".split()
+        src = ["I", "thought", "I", "would", "sail", "about", "a", "little", "and", "see", "the", "watery", "part"]
         w = self._laid_out(src, ["a"] * 6 + ["b"] * 7)
         e = Enumerator(w, (10,), max_runs=2)
         assert e.count() == len(e.all())
@@ -347,7 +343,7 @@ class TestLargestSection:
         from redactor.dom import Read
         from redactor.source import Word
         words, secs = [], []
-        for n, (sec, count) in enumerate(groups):
+        for _n, (sec, count) in enumerate(groups):
             for i in range(count):
                 words.append(Word(f"w{sec}_{i}", left=0, top=0,
                                   width=9, height=9, line=f"l{sec}"))
@@ -463,8 +459,8 @@ class TestTightCrop:
         assert bottom - top < 100
 
     def test_width_still_spans_the_column(self):
-        from redactor.source import Word
         from redactor.render import column
+        from redactor.source import Word
         w = [Word("a", left=10, top=0, width=20, height=10, line="P-0"),
              Word("b", left=500, top=0, width=20, height=10, line="P-0")]
         left, _, right, _ = column(w, margin=5, keep=[0])
@@ -480,13 +476,11 @@ class TestChallengePages:
     def test_spots_a_bot_wall(self):
         from redactor.dom import is_challenge
         assert is_challenge(
-            "Performing security verification This website uses a security "
-            "service to protect against malicious bots".split())
+            ["Performing", "security", "verification", "This", "website", "uses", "a", "security", "service", "to", "protect", "against", "malicious", "bots"])
 
     def test_spots_a_cloudflare_interstitial(self):
         from redactor.dom import is_challenge
-        assert is_challenge("Just a moment ... Enable JavaScript and cookies "
-                            "to continue".split())
+        assert is_challenge(["Just", "a", "moment", "...", "Enable", "JavaScript", "and", "cookies", "to", "continue"])
 
     def test_leaves_an_ordinary_page_alone(self):
         from redactor.dom import is_challenge
@@ -505,7 +499,7 @@ class TestSectionReachesTheReader:
 
         def fake_read(url, png, **kw):
             seen.update(kw)
-            return None
+            return
 
         monkeypatch.setattr(dom, "read", fake_read)
         monkeypatch.setattr(agent, "MIN_WORDS", 1)
@@ -533,6 +527,7 @@ class TestBudgetFallthrough:
 
     def test_the_budget_is_per_rung(self):
         import inspect
+
         from redactor import ladder
         body = inspect.getsource(ladder.climb)
         # the deadline is set inside the loop over rungs, not before it
@@ -553,7 +548,7 @@ class TestFluidColor:
     def test_reproduces_the_reference(self):
         mixed = render.fluid_color(self.RUEFLE_PAPER)
         got = tuple(int(mixed[i:i + 2], 16) for i in (1, 3, 5))
-        assert all(abs(a - b) <= 4 for a, b in zip(got, self.RUEFLE_FLUID)), got
+        assert all(abs(a - b) <= 4 for a, b in zip(got, self.RUEFLE_FLUID, strict=False)), got
 
     def test_takes_the_color_out(self):
         r, g, b = (int(render.fluid_color(self.RUEFLE_PAPER)[i:i + 2], 16)
@@ -597,12 +592,12 @@ class TestHalo:
     """The paper left around a kept run must not uncover its neighbours."""
 
     def row(self, *spans):
-        return [Word(t, left=l, top=10, width=w, height=12, line="1")
-                for t, l, w in spans]
+        return [Word(t, left=ln, top=10, width=w, height=12, line="1")
+                for t, ln, w in spans]
 
     def test_stops_short_of_a_close_neighbour(self):
         ws = self.row(("kept", 100, 40), ("next", 148, 40))
-        left, top, right, bottom = render._halo([0], ws, pad=20)
+        _left, _top, right, _bottom = render._halo([0], ws, pad=20)
         assert right <= 148, f"halo reached {right}, neighbour starts at 148"
 
     def test_splits_the_gap_rather_than_taking_it_all(self):
@@ -699,7 +694,10 @@ class TestErasePixels:
         # field.
         differing = subprocess.run(
             ["magick", "compare", "-metric", "AE", str(a), str(b), "null:"],
-            capture_output=True, text=True).stderr.strip().split()[0]
+            capture_output=True, text=True,
+            # `compare` exits non-zero precisely when the images differ, which
+            # is the result being read rather than a failure to run.
+            check=False).stderr.strip().split()[0]
         assert differing == "0", f"{differing} pixels differ between seeds"
 
 
@@ -869,10 +867,9 @@ class TestGapClosing:
                 for t in tops]
 
     def test_a_poem_on_one_line_is_left_alone(self, monkeypatch, tmp_path):
-        import subprocess as sp
         from redactor import render
         calls = []
-        monkeypatch.setattr(render, "_run", lambda c: calls.append(c))
+        monkeypatch.setattr(render, "_run", calls.append)
         monkeypatch.setattr(render, "page_height", lambda *a, **k: 400)
         out = render._close_the_gaps(tmp_path / "r.png", self._spread([0, 10]),
                                      [0, 1], (0, 0, 500, 100), "magick")
@@ -882,7 +879,7 @@ class TestGapClosing:
     def test_a_poem_split_down_a_page_is_stacked(self, monkeypatch, tmp_path):
         from redactor import render
         calls = []
-        monkeypatch.setattr(render, "_run", lambda c: calls.append(c))
+        monkeypatch.setattr(render, "_run", calls.append)
         monkeypatch.setattr(render, "page_height", lambda *a, **k: 9000)
         render._close_the_gaps(tmp_path / "r.png", self._spread([0, 4000, 8000]),
                                [0, 1, 2], (0, 0, 500, 9000), "magick")
@@ -893,7 +890,7 @@ class TestGapClosing:
     def test_each_band_is_short(self, monkeypatch, tmp_path):
         from redactor import render
         calls = []
-        monkeypatch.setattr(render, "_run", lambda c: calls.append(c))
+        monkeypatch.setattr(render, "_run", calls.append)
         monkeypatch.setattr(render, "page_height", lambda *a, **k: 9000)
         render._close_the_gaps(tmp_path / "r.png", self._spread([0, 4000]),
                                [0, 1], (0, 0, 500, 9000), "magick")

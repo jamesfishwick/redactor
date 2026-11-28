@@ -26,9 +26,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
-from redactor.candidates import Enumerator, Space  # noqa: E402
-from redactor.prosody import FORMS, METERS, SCHEMES, rhyme_classes  # noqa: E402
-from redactor.source import Word  # noqa: E402
+from redactor.candidates import Enumerator, Space
+from redactor.prosody import FORMS, METERS, SCHEMES, rhyme_classes
+from redactor.source import Word
 
 # The opening of Moby-Dick, stripped of punctuation. Short enough that the
 # unconstrained count is reachable and long enough that it runs to eleven
@@ -84,8 +84,8 @@ def constraints_table() -> str:
     # from whatever it is erasing, so a short source makes a harsh filter.
     learned = (f" Trigrams are learned from the paragraph itself, as the tool "
                f"does, giving a vocabulary of {len(tri)}." if tri else "")
-    out = [f"Measured on the {len(words)}-word opening of _Moby-Dick_, "
-           f"counting 5/7/5 erasures.{learned}",
+    out = [(f"Measured on the {len(words)}-word opening of _Moby-Dick_, "
+           f"counting 5/7/5 erasures.{learned}"),
            "",
            f"| {'constraint':<{width}} | candidates     |",
            f"| {'-' * width} | -------------- |"]
@@ -124,7 +124,7 @@ def forms_table(url: str) -> str:
         else:
             admits = Space(words, form, max_runs=2,
                            meter=METERS.get(name)).count()
-            kind = ("%s, alternating stress" % "/".join(str(n) for n in form)
+            kind = ("{}, alternating stress".format("/".join(str(n) for n in form))
                     if METERS.get(name)
                     else "/".join(str(n) for n in form))
         pct = 100.0 * admits / fits if fits else 0.0
@@ -136,7 +136,7 @@ def forms_table(url: str) -> str:
            "",
            f"| {'form':<{nw}} | admits  | of             | {'shape':<{kw}} |",
            f"| {'-' * nw} | ------- | -------------- | {'-' * kw} |"]
-    for name, admits, fits, pct, kind in rows:
+    for name, _admits, fits, pct, kind in rows:
         shown = f"{pct:.2f}%" if pct >= 0.01 or pct == 0 else "<0.01%"
         out.append(f"| {'`' + name + '`':<{nw}} | {shown:>7} | "
                    f"{fits:>14,} | {kind:<{kw}} |")
@@ -149,7 +149,7 @@ def splice(readme: pathlib.Path, name: str, body: str) -> None:
     """Replace one marked region, leaving the rest of the file alone."""
     begin, end = f"<!-- measured:{name} -->", f"<!-- /measured:{name} -->"
     text = readme.read_text()
-    pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.S)
+    pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.DOTALL)
     if not pattern.search(text):
         raise SystemExit(f"{readme}: no region marked {begin} ... {end}")
     readme.write_text(pattern.sub(f"{begin}\n\n{body}\n\n{end}", text))

@@ -124,7 +124,8 @@ def by_claude_code(candidates, words, url: str, shortlist: int = 60,
     try:
         proc = subprocess.run(
             [exe, "-p", PROMPT.format(url=url, listing=listing)],
-            capture_output=True, text=True, errors="replace", timeout=timeout)
+            capture_output=True, text=True, errors="replace",
+            timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
     text = proc.stdout.strip()

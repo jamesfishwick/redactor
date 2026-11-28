@@ -31,7 +31,7 @@ def tag(nlp, words) -> list[str] | None:
     tags = [t.pos_ for t in doc if not t.is_space]
     # spaCy splits punctuation off, so realign by consuming one tag per word
     out, i = [], 0
-    for w in words:
+    for _w in words:
         while i < len(tags) and tags[i] == "PUNCT":
             i += 1
         out.append(tags[i] if i < len(tags) else "X")
