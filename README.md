@@ -2,32 +2,41 @@
 
 Finds an erasure poem hidden in a web page, then covers everything else.
 
-Pointed at the Hacksgiving rules page, it produced this:
+![A column of legal text under correction fluid. Two phrases are left standing in it, "to be" on one line and "that a work is unpublished shall" on the next, with the erased lines showing through faintly behind](docs/erasure-fairuse.png)
+
+That is [section 107 of the Copyright Act](https://www.copyright.gov/title17/92chap1.html), the fair use statute, which is the law deciding whether erasure poetry is legal at all. 184 words, 7,175 of whose erasures scan as iambic pentameter. This is the one a model chose:
 
 ```
-as you want it to be. Your agent we
+to be that a work is unpublished shall
 ```
 
-Ten syllables, iambic, and a true subsequence of Fly's own copy. 35,639 erasures of that page scan as pentameter. A model picked this one and said it "turns the page's product instructions into a quiet ending where 'Your agent' turns into 'we,' as if the tool you shape to your wishes ends up being you."
+The poem is one metrical line. The page breaks it across two, because the words are where the statute put them and an erasure never moves anything. What the model said about it: the clause turns into something close to Hamlet, so a copyright provision becomes a small poem about work that is never released.
 
-## Two it found
+## Two more
 
-From [section 107 of the Copyright Act](https://www.copyright.gov/title17/92chap1.html), the fair use statute, which is the law deciding whether erasure poetry is legal at all. 184 words, 7,175 of whose erasures scan as pentameter:
+![Two surviving lines on a blog page under correction fluid, reading "out from a safe location, like town, and trekked their way to" and "the trek; the problem is that I'm too smart and I care too"](docs/erasure-tabletop.png)
 
-```
-commercial nature is unpublished shall
-```
-
-From [a tabletop blog arguing about how to end a session](https://theangrygm.com/ask-angry-journey-home/). 1,975 words of article, 187 of whose erasures are rhymed quatrains:
+From [a tabletop blog arguing about how to end a session](https://theangrygm.com/ask-angry-journey-home/). 1,975 words, and 187 of its erasures are rhymed quatrains, 8/6/8/6 with the second and fourth lines rhyming:
 
 ```
-the heroes. And before you ask,
-the answer is no; you
-can’t just solve this with said: “I hold
-my nose and I get through
+out from a safe location, like
+town, and trekked their way to
+the trek; the problem is that I'm
+too smart and I care too
 ```
 
-Both are true subsequences of their page, in original order, with nothing added, and both were picked by a model from a sample drawn uniformly across the whole page rather than from the front of an enumeration.
+![Two phrases left on Fly's Hacksgiving page under correction fluid, reading "yourself or ask a coding agent to do it for" and "you. tools you like to help you"](docs/erasure-hacksgiving.png)
+
+From [Fly's own Hacksgiving page](https://fly.io/hacksgiving/), which is 487 words and admits 12 rhymed couplets:
+
+```
+yourself or ask a coding agent to
+do it for you. tools you like to help you
+```
+
+That one is weak, and the model that ranked it said so: every poem it was shown quoted the page's instructions almost word for word, so none of them said anything the page had not. A short page gives a narrow choice, and a narrow choice shows.
+
+Each of these is a true subsequence of its page, in original order, with nothing added, chosen by a model from a sample drawn uniformly across the whole page rather than off the front of an enumeration.
 
 An erasure keeps some of a source and deletes the rest. Nothing is added, nothing is reordered, and what survives stays where it was on the page. `redactor` enumerates every erasure of a page that satisfies a given form, ranks them, and renders the winner as a redacted screenshot.
 
