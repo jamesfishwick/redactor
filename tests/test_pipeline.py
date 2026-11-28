@@ -342,6 +342,17 @@ class TestTsvParsing:
         with pytest.raises(ValueError):
             source.words_from_tsv(rows)
 
+    def test_a_header_missing_any_column_is_refused(self):
+        """A missing conf is the one that matters. The except around float()
+        swallows its KeyError row by row, so the list empties in silence,
+        which is the failure the guard exists to refuse."""
+        cols = self.HEADER.split("\t")
+        for drop in ("conf", "left", "block_num"):
+            header = "\t".join(c for c in cols if c != drop)
+            rows = header + "\n5\t1\t1\t1\t1\t1\t50\t10\t40\t12\t99\tword\n"
+            with pytest.raises(ValueError, match=drop):
+                source.words_from_tsv(rows)
+
     def test_a_stream_with_no_header_is_refused(self):
         """DictReader takes the first line as the header, so a caller that
         strips it loses a word and gets no error. Refuse instead."""

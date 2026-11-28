@@ -104,6 +104,12 @@ def _runnable(exe: str) -> bool:
     return "snap" not in (probe.stdout + probe.stderr).lower()
 
 
+REQUIRED_COLUMNS = frozenset({
+    "text", "conf", "left", "top", "width", "height",
+    "block_num", "par_num", "line_num",
+})
+"""Every column `words_from_tsv` reads. Kept beside the reader that needs it."""
+
 MIN_CONF = 55.0
 """Confidence below which a reported word is treated as noise, not text."""
 
@@ -149,17 +155,20 @@ def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:
 
     Malformed input is handled unevenly, by column. A row short of its columns
     loses its text and is dropped, as is a row whose conf will not parse.
-    Unparseable geometry raises instead, so a truncated stream can either come
-    back short or blow up, depending on where it was cut.
+    Unparseable geometry raises instead.
     """
     reader = csv.DictReader(io.StringIO(tsv), delimiter="\t",
                             quoting=csv.QUOTE_NONE, quotechar=None)
     # DictReader takes the first line as the header whatever it holds, so a
     # caller that strips Tesseract's header loses its first word and gets a
-    # list one short with no error.
-    if "text" not in (reader.fieldnames or ()):
-        raise ValueError(
-            f"first line is not a Tesseract TSV header: {reader.fieldnames}")
+    # list one short with no error. Every column the loop dereferences is
+    # checked, not just one: a missing conf is swallowed by the except below
+    # and empties the list just as quietly, and a missing geometry column
+    # would raise KeyError where this contract promises ValueError.
+    missing = REQUIRED_COLUMNS - set(reader.fieldnames or ())
+    if missing:
+        raise ValueError(f"not a Tesseract TSV header, missing "
+                         f"{sorted(missing)}: {reader.fieldnames}")
 
     words = []
     for row in reader:
