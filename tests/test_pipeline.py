@@ -532,6 +532,23 @@ class TestCoverageAndWindow:
         assert render.covered(render._bands(self._words([0, 20])), [], 900,
                               1.0) == (0, 900)
 
+    def test_what_is_covered_always_holds_what_is_shown(self):
+        """The band and the crop read the same `_spans`, so the band can
+        never fall short of what `_frame` goes on to cut out."""
+        from redactor import render
+        for n in (1, 3, 21, 60):
+            ws = self._words([i * 20 for i in range(n)])
+            lines, unit = render._bands(ws), render.text_unit(ws)
+            limit = n * 20 + 40
+            for keep in ([0], [n - 1], [0, n - 1]):
+                ranges = render.window(ws, keep)
+                top, bottom = render.covered(lines, ranges, limit, unit)
+                for t, h in render._spans(lines, ranges,
+                                          round(render.FRAME_PAD * unit),
+                                          limit):
+                    assert top <= t, f"{n} lines, keep {keep}: band starts late"
+                    assert t + h <= bottom, f"{n} lines, keep {keep}: band ends early"
+
     def test_a_poem_the_page_never_placed_frames_nothing(self):
         from redactor import render
         from redactor.source import Word
@@ -766,6 +783,53 @@ class TestErasePixels:
              "-format", "%[fx:standard_deviation]", "info:"],
             capture_output=True, text=True, check=True).stdout
         return float(out)
+
+    def lines_page(self, tmp_path, n=20, pitch=28, h=24):
+        """A page of type, so keeping one line leaves nineteen to cover.
+
+        The two-word fixture cannot catch coverage narrowed to the poem's own
+        lines, because both its words sit on the one line and there is nothing
+        else to narrow away.
+        """
+        png = tmp_path / "lines.png"
+        draw = []
+        for i in range(n):
+            y = 20 + i * pitch
+            draw += ["-draw", f"rectangle 40,{y} 240,{y + h}"]
+        subprocess.run(["magick", "-size", f"400x{20 + n * pitch + 20}",
+                        "xc:#edd4bc", "-fill", "#2a2018", *draw, str(png)],
+                       check=True)
+        return png, [Word(f"w{i}", left=40, top=20 + i * pitch, width=200,
+                          height=h, line=f"L{i}") for i in range(n)]
+
+    def live_rows(self, png, h=24):
+        """Row bands whose spread still reads as ink on paper."""
+        w, total = subprocess.run(
+            ["magick", "identify", "-format", "%w %h", str(png)],
+            capture_output=True, text=True, check=True).stdout.split()
+        live = 0
+        for y in range(0, int(total) - h, h):
+            spread = subprocess.run(
+                ["magick", str(png), "-crop", f"{w}x{h}+0+{y}", "+repage",
+                 "-colorspace", "Gray", "-format",
+                 "%[fx:standard_deviation]", "info:"],
+                capture_output=True, text=True, check=True).stdout
+            if float(spread) > 0.15:
+                live += 1
+        return live
+
+    @pytest.mark.parametrize("style", ["black", "whiteout"])
+    def test_a_poem_on_one_line_still_covers_the_rest(self, tmp_path, style):
+        """Coverage narrowed to the poem's lines left the others readable.
+
+        Measured against the code before the fix: all 24 row bands of this
+        page still read as type, in both styles. The poem keeps one.
+        """
+        png, ws = self.lines_page(tmp_path)
+        assert self.live_rows(png) > 20, "fixture is not a page of type"
+        dest = render.erase(png, ws, [1], tmp_path / f"lines_{style}.png",
+                            style=style, seed=1)
+        assert self.live_rows(dest) <= 2, "a line the poem dropped survived"
 
     @pytest.mark.parametrize("style", ["black", "whiteout"])
     def test_the_erased_word_goes_and_the_kept_word_stays(self, tmp_path, style):

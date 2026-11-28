@@ -205,6 +205,23 @@ def window(words, keep: list[int], page_lines: int = PAGE_LINES,
     return ranges
 
 
+def _spans(lines, ranges, pad: int, limit: int) -> list[tuple[int, int]]:
+    """Top and height of each run of lines the finished image shows.
+
+    One routine, because `covered` has to cover exactly what `_frame` goes on
+    to crop. Computing it twice is how a band that gets covered and a band
+    that gets shown drift apart, and the gap between them is page nobody
+    erased.
+    """
+    out = []
+    for lo, hi in ranges:
+        top = max(0, lines[lo][0] - pad)
+        bottom = min(limit, lines[hi][1] + pad)
+        if bottom > top:
+            out.append((top, bottom - top))
+    return out
+
+
 def covered(lines, ranges, limit: int, unit: float) -> tuple[int, int]:
     """Top and bottom of the only strip of page worth covering.
 
@@ -217,16 +234,16 @@ def covered(lines, ranges, limit: int, unit: float) -> tuple[int, int]:
     so the torn edge of the stroke falls outside the visible image instead of
     across the top of it.
 
-    With no window at all the whole page is covered, which is one of the two
-    paths where `_frame` hands the page back uncropped. On the other, a window
-    whose spans all fall outside the render, the page would come back covered
-    only as far as this band reaches. No input has been found that takes it.
+    Whenever `_frame` finds nothing to crop it hands back the whole page, so
+    the whole page is what this covers in that case. Both read the same
+    `_spans`, which is what keeps them in step.
     """
-    if not ranges:
+    spans = _spans(lines, ranges, round(FRAME_PAD * unit), limit)
+    if not spans:
         return 0, limit
-    reach = round((FRAME_PAD + FLUID_PAD + TEAR) * unit)
-    return (max(0, min(lines[lo][0] for lo, _ in ranges) - reach),
-            min(limit, max(lines[hi][1] for _, hi in ranges) + reach))
+    reach = round((FLUID_PAD + TEAR) * unit)
+    return (max(0, spans[0][0] - reach),
+            min(limit, spans[-1][0] + spans[-1][1] + reach))
 
 
 def page_height(png: Path, magick: str = "magick") -> int:
@@ -596,18 +613,10 @@ def _frame(rendered: Path, words, keep, box, magick: str,
     lines = _bands(words)
     if ranges is None:
         ranges = window(words, keep)
-    if not ranges:
-        return rendered
 
     x0, _, x1, _ = box
     width, total = x1 - x0, page_height(rendered, magick)
-    pad = round(FRAME_PAD * text_unit(words))
-    spans = []
-    for lo, hi in ranges:
-        top = max(0, lines[lo][0] - pad)
-        bottom = min(total, lines[hi][1] + pad)
-        if bottom > top:
-            spans.append((top, bottom - top))
+    spans = _spans(lines, ranges, round(FRAME_PAD * text_unit(words)), total)
     if not spans:
         return rendered
 
