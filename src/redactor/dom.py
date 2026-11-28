@@ -359,3 +359,61 @@ def largest_section(read: Read, floor: int = 150):
         runs.setdefault(sec, []).append(word)
     best = max(runs.values(), key=len)
     return best if len(best) >= floor else read.words
+
+
+def read_page(url: str, png, *, width: int = 1100, height: int = 5000,
+              section: str = "", least: int = 120, log=None):
+    """Words for a page, from the DOM where it answers and OCR where it does not.
+
+    The DOM is asked first and OCR is the fallback, not the other way round.
+    A browser knows each word exactly and knows whether it sits in a nav or a
+    footer; OCR guesses at both. OCR stays for the case the DOM cannot answer,
+    such as a page that is an image of text.
+
+    `least` is how many words make a page worth erasing, and it does two jobs:
+    a DOM read thinner than this is treated as a failure worth falling back
+    from, and a page still thinner than it after both readers is refused. A
+    caller erasing one page on request can set it low; one publishing
+    unattended should not.
+
+    Returns `(words, screenshot path)`, or None when neither reader found
+    enough. Both callers went through here rather than keeping a copy, because
+    the copy that lived in the CLI stayed on OCR through every improvement the
+    DOM path gained and quietly read a different page from the agent.
+    """
+    from pathlib import Path
+
+    from . import source
+
+    words = shot = None
+    # The section is chosen inside the read, not after it. The capture is
+    # clipped to whatever was chosen, so asking afterwards would clip to the
+    # wrong part of the page and then look for the section in it.
+    got = read(url, png, width=width, section=section)
+    if got is not None:
+        shot, words = Path(got.png), got.words
+        if section and len(words) < least and log:
+            log(f"section {section!r} gave {len(words)} words")
+
+    if words is None or len(words) < least:
+        try:
+            shot = source.screenshot(url, png, width=width, height=height)
+            html = source.page_html(url)
+            pairs = source.article_bigrams(html) if html else None
+            ocr = source.from_image(shot, pairs=pairs)
+            if len(ocr) < least and pairs is not None:
+                ocr = source.from_image(shot)
+            # The DOM path rejects a page that only answered with a bot
+            # challenge. Reading the same page again with a different tool
+            # would erase the challenge, which is what this guards against.
+            if is_challenge([w.text for w in ocr]):
+                return None
+            if words is None or len(ocr) > len(words):
+                words = ocr
+        except Exception:
+            if words is None:
+                return None
+
+    if words is None or len(words) < least:
+        return None
+    return words, shot

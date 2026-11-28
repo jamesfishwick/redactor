@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import candidates as cand
-from . import compare, ladder, publish, rank, render, shapes, source, tagging
+from . import compare, dom, ladder, publish, rank, render, shapes, source, tagging
 from .prosody import FORMS, METERS
 
 
@@ -55,8 +55,15 @@ def main(argv=None) -> int:
         words = source.from_html(args.url)
         shot = None
     else:
-        shot = source.screenshot(args.url, args.out / "page.png")
-        words = source.from_image(shot)
+        # A low bar, unlike the agent's: this page was asked for by name, so
+        # a thin one is the caller's business rather than a reason to refuse.
+        got = dom.read_page(args.url, args.out / "page.png", least=20,
+                            log=lambda m: print(m, file=sys.stderr))
+        if got is None:
+            print("could not read that page, or it answered with a bot "
+                  "challenge", file=sys.stderr)
+            return 1
+        words, shot = got
     print(f"source: {len(words)} words from {args.url}", file=sys.stderr)
     if len(words) < 20:
         print("too little text to erase", file=sys.stderr)

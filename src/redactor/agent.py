@@ -14,18 +14,21 @@ and the display the same artifact.
 
 from __future__ import annotations
 
+import json
 import re
-import sys
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+import sys
+
 from . import publish, sources
 
-URL_IN_TITLE = re.compile(r"erase:\s*(https?://\S+)", re.IGNORECASE)
+URL_IN_TITLE = re.compile(r"erase:\s*(https?://\S+)", re.I)
 # `erase: <url> section: § 107` asks for one part of a long document. Without
 # it a long page is reduced to its longest section, which on Title 17 chapter 1
 # is 17,754 words of royalty provisions rather than the 184 about fair use.
-SECTION_IN_TITLE = re.compile(r"section:\s*(.+?)\s*$", re.IGNORECASE)
+SECTION_IN_TITLE = re.compile(r"section:\s*(.+?)\s*$", re.I)
 
 
 @dataclass(frozen=True)
@@ -51,7 +54,7 @@ def open_requests(connection: str, repo: str) -> list[Request]:
         found = URL_IN_TITLE.search(issue.get("title") or "")
         if not found:
             continue
-        if any(lab.get("name") == DECLINED for lab in issue.get("labels") or []):
+        if any(l.get("name") == DECLINED for l in issue.get("labels") or []):
             continue
         title = issue.get("title") or ""
         named = SECTION_IN_TITLE.search(title)
@@ -137,46 +140,17 @@ def erase_page(url: str, *, out: Path, runs: int = 2,
                shot_size: tuple[int, int] = SHOT, section: str = ""):
     """Read the page, enumerate its erasures. Returns (words, rung, shot) or None.
 
-    The DOM is asked first and OCR is the fallback, not the other way round.
-    A browser knows each word exactly and knows whether it sits in a nav or a
-    footer; OCR guesses at both. OCR stays for the case the DOM cannot answer,
-    such as a page that is an image of text.
+    `MIN_WORDS` is the bar here because this path publishes unattended, so a
+    page too thin to give a wide choice is better skipped than erased.
     """
-    from . import dom, ladder, source
+    from . import dom, ladder
 
-    shot_path = out / "page.png"
-    words = None
-    # The section is chosen inside the read, not after it. The capture is
-    # clipped to whatever was chosen, so asking afterwards would clip to the
-    # wrong part of the page and then look for the section in it.
-    got = dom.read(url, shot_path, width=shot_size[0], section=section)
-    if got is not None:
-        shot, words = Path(got.png), got.words
-        if section and len(words) < MIN_WORDS:
-            print(f"  section {section!r} gave {len(words)} words",
-                  file=sys.stderr)
-
-    if words is None or len(words) < MIN_WORDS:
-        try:
-            shot = source.screenshot(url, shot_path,
-                                     width=shot_size[0], height=shot_size[1])
-            html = source.page_html(url)
-            pairs = source.article_bigrams(html) if html else None
-            ocr = source.from_image(shot, pairs=pairs)
-            if len(ocr) < MIN_WORDS and pairs is not None:
-                ocr = source.from_image(shot)
-            # The DOM path rejects a page that only answered with a bot
-            # challenge. Reading the same page again with a different tool
-            # would erase the challenge, which is what this guards against.
-            if dom.is_challenge([w.text for w in ocr]):
-                return None
-            if words is None or len(ocr) > len(words):
-                words = ocr
-        except Exception:  # noqa: BLE001 - OCR is already the fallback
-            if words is None:
-                return None
-    if words is None or len(words) < MIN_WORDS:
+    got = dom.read_page(url, out / "page.png", width=shot_size[0],
+                        height=shot_size[1], section=section, least=MIN_WORDS,
+                        log=lambda m: print(f"  {m}", file=sys.stderr))
+    if got is None:
         return None
+    words, shot = got
 
     # Part-of-speech pruning is not wired into the sampler, so tagging here
     # would load spaCy and change nothing. Contiguity carries the grammar.
