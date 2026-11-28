@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# poll — wake the agent only when there is something for it to do.
+#
+# A Sprite is free while idle and bills by the second while awake, so the
+# check has to happen somewhere else. Both signals are cheap and neither
+# needs the Sprite: an open request is one API call, and MetaFilter's feed
+# is 18KB. The Sprite is only started once one of them says yes.
+#
+# MetaFilter posts about every 90 minutes and its feed holds 18 hours, so a
+# two-hour poll never misses one. Publishing at that rate would be a dozen
+# entries a day, which is a log rather than a gallery, so a run publishes at
+# most one and the rest wait for the next poll.
+#
+# Install it to run every two hours:
+#   crontab -e
+#   0 */2 * * * ~/Workspace/personal/redactor/bin/poll >> /tmp/redactor-poll.log 2>&1
+#
+# Keeping it here rather than in a GitHub Action keeps the Fly token off
+# GitHub. The cost is that the agent's rhythm is this machine's rhythm.
+
+set -uo pipefail
+
+REPO="${REDACTOR_REPO:-jamesfishwick/redactor}"
+SPRITE="${REDACTOR_SPRITE:-redactor}"
+CONNECTION="${REDACTOR_CONNECTION:-sd655SFt0rlFunx2u6AoqQ}"
+FEED="${REDACTOR_FEED:-https://feeds.feedburner.com/Metafilter}"
+STATE="${REDACTOR_STATE:-$HOME/.cache/redactor-poll}"
+SPRITE_BIN="${SPRITE_BIN:-$HOME/.local/bin/sprite}"
+
+say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
+
+wake() {
+  say "waking $SPRITE: $1"
+  "$SPRITE_BIN" exec -s "$SPRITE" --no-stdin -- bash -c \
+    "cd ~/redactor && .venv/bin/redactor-agent --connection $CONNECTION"
+}
+
+# A request beats idle work, and asking costs one call whether or not the
+# Sprite is running.
+requests=$(gh api "repos/$REPO/issues?state=open&per_page=30" \
+             --jq '[.[] | select(.pull_request == null)
+                        | select(.title | test("erase:\\s*https?://"; "i"))
+                        | select([.labels[].name] | index("declined") | not)]
+                   | length' 2>/dev/null) || requests=0
+if [ "${requests:-0}" -gt 0 ]; then
+  wake "$requests open request(s)"
+  exit $?
+fi
+
+# Idle work only when the feed has moved. The newest item's link is enough:
+# a new post always arrives at the top.
+mkdir -p "$(dirname "$STATE")"
+# Parsed with python rather than grep: an item's link is not on its own
+# line and the shell version matched the channel link instead.
+newest=$(curl -fsS --max-time 30 "$FEED" 2>/dev/null | python3 -c "
+import sys, re
+m = re.search(r'<item>.*?<link>(.*?)</link>', sys.stdin.read(), re.S)
+print(m.group(1).strip() if m else '')" 2>/dev/null)
+if [ -z "$newest" ]; then
+  say "feed unreachable; nothing done"
+  exit 0
+fi
+
+if [ -f "$STATE" ] && [ "$(cat "$STATE")" = "$newest" ]; then
+  say "feed unchanged; sprite left asleep"
+  exit 0
+fi
+
+printf '%s' "$newest" > "$STATE"
+wake "feed moved to $newest"

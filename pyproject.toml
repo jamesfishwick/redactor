@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Finds erasure poems hidden in web pages and blacks out the rest"
 requires-python = ">=3.11"
 dependencies = [
+    "trafilatura>=1.12",
     "pronouncing>=0.2.0",
     "requests>=2.31",
 ]
@@ -15,6 +16,10 @@ llm = ["anthropic>=0.40"]
 
 [project.scripts]
 redactor = "redactor.cli:main"
+redactor-agent = "redactor.run:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
 
 [build-system]
 requires = ["hatchling"]

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import candidates as cand
-from . import compare, ladder, publish, rank, render, shapes, source, tagging
+from . import agent, compare, ladder, publish, rank, render, shapes, source, tagging
 from .prosody import FORMS, METERS
 
 
@@ -24,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-r", "--runs", type=int, default=2,
                    help="maximum contiguous spans of kept words (default 2)")
     p.add_argument("-o", "--out", type=Path, default=Path("out"))
+    p.add_argument("--style", default="whiteout", choices=sorted(render.STYLES),
+                   help="how the erased words are covered: 'whiteout' brushes "
+                        "correction fluid mixed from the page's own background, "
+                        "'black' lays an opaque bar")
+    p.add_argument("--fluid", metavar="COLOR",
+                   help="override the whiteout color (any ImageMagick color, "
+                        "e.g. '#f5f3f1'); by default it is mixed from the page")
     p.add_argument("--no-image", action="store_true",
                    help="read the page as text; skip screenshot and rendering")
     p.add_argument("--no-pos", action="store_true", help="skip part-of-speech pruning")
@@ -68,7 +75,9 @@ def main(argv=None) -> int:
         for i in keep:
             print(words[i].text)
         if shot is not None:
-            dest = render.erase(shot, words, keep, args.out / "erasure.png")
+            dest = render.erase(shot, words, keep, args.out / "erasure.png",
+                                style=args.style, seed=args.seed,
+                                color=args.fluid)
             print(f"\nwrote {dest}", file=sys.stderr)
         return 0
 
@@ -81,8 +90,7 @@ def main(argv=None) -> int:
             print(f"pos: {len(tri)} trigrams learned from the source", file=sys.stderr)
 
     if args.form == "auto":
-        rung = ladder.climb(words, max_runs=args.runs, pos_tags=tags,
-                            trigrams=tri)
+        rung = ladder.climb(words, max_runs=args.runs)
         if rung is None:
             shape_used = next(
                 (sh for sh in ladder.FALLBACK_SHAPES
@@ -98,10 +106,13 @@ def main(argv=None) -> int:
             for i in keep:
                 print(words[i].text)
             if shot is not None:
-                dest = render.erase(shot, words, keep, args.out / "erasure.png")
+                dest = render.erase(shot, words, keep, args.out / "erasure.png",
+                                    style=args.style, seed=args.seed,
+                                    color=args.fluid)
                 print(f"\nwrote {dest}", file=sys.stderr)
             return 0
         found = rung.candidates
+        pool = rung.pool
         form_label = rung.form
         print(f"form: {ladder.describe(rung)}", file=sys.stderr)
     else:
@@ -109,6 +120,7 @@ def main(argv=None) -> int:
                             allowed_trigrams=tri, meter=METERS.get(args.form))
         found = e.all()
         form_label = args.form
+        pool = len(found)
         print(f"candidates: {len(found)} ({args.form}, <={args.runs} runs)",
               file=sys.stderr)
     if not found:
@@ -123,7 +135,9 @@ def main(argv=None) -> int:
         print(compare.report(attempts, words))
         best = next((a.poem for a in reversed(attempts) if a.poem), None)
         if shot is not None and best is not None:
-            dest = render.erase(shot, words, best.indices(), args.out / "erasure.png")
+            dest = render.erase(shot, words, best.indices(),
+                                args.out / "erasure.png", style=args.style,
+                                seed=args.seed, color=args.fluid)
             print(f"\nwrote {dest}", file=sys.stderr)
         return 0
 
@@ -146,7 +160,9 @@ def main(argv=None) -> int:
 
     dest = None
     if shot is not None:
-        dest = render.erase(shot, words, chosen.indices(), args.out / "erasure.png")
+        dest = render.erase(shot, words, chosen.indices(),
+                            args.out / "erasure.png", style=args.style,
+                            seed=args.seed, color=args.fluid)
         print(f"\nwrote {dest}", file=sys.stderr)
 
     if args.publish:
@@ -157,7 +173,7 @@ def main(argv=None) -> int:
             return 0
         written = publish.publish(
             conn, args.publish, url=args.url, poem=chosen.render(words),
-            form=form_label, pool=len(found), note=note, image=dest)
+            form=form_label, pool=pool, note=note, image=dest)
         for kind, link in written.items():
             print(f"published {kind}: {link}", file=sys.stderr)
     return 0
