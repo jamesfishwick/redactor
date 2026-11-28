@@ -446,31 +446,77 @@ class TestNamedSection:
         assert len(named_section(r, "start", cap=500)) == 500
 
 
-class TestTightCrop:
+class TestCoverageAndWindow:
     def _words(self, tops):
         from redactor.source import Word
         return [Word("w", left=10, top=t, width=20, height=10, line=f"P-{t}")
                 for t in tops]
 
-    def test_height_follows_the_kept_words(self):
+    def test_coverage_reaches_every_line_whatever_the_poem_keeps(self):
+        """Narrowing coverage to the poem's own lines is how a render leaks.
+
+        Measured on an essay page: a poem surviving in one line left 255 of
+        the page's 292 words legible to OCR in the finished image.
+        """
         from redactor.render import column
-        _, top, _, bottom = column(self._words([0, 5000, 9000]), margin=5,
-                                   keep=[1])
-        assert bottom - top < 100
+        _, top, _, bottom = column(self._words([0, 5000, 9000]), margin=5)
+        assert top <= 0
+        assert bottom >= 9010
 
     def test_width_still_spans_the_column(self):
         from redactor.render import column
         from redactor.source import Word
         w = [Word("a", left=10, top=0, width=20, height=10, line="P-0"),
              Word("b", left=500, top=0, width=20, height=10, line="P-0")]
-        left, _, right, _ = column(w, margin=5, keep=[0])
+        left, _, right, _ = column(w, margin=5)
         assert right - left > 500
 
     def test_the_box_stops_at_the_capture(self):
         from redactor.render import column
-        _, _, _, bottom = column(self._words([0, 9000]), margin=5, keep=[1],
+        _, _, _, bottom = column(self._words([0, 9000]), margin=5,
                                  page_height=4000)
         assert bottom <= 4000
+
+    def test_a_one_line_poem_still_gets_a_page(self):
+        from redactor import render
+        ws = self._words([n * 20 for n in range(40)])
+        shown = sum(hi - lo + 1 for lo, hi in render.window(ws, keep=[0]))
+        assert shown >= render.PAGE_LINES
+
+    def test_the_window_grows_to_a_page_on_any_arrangement(self):
+        """The growth loop has no stop of its own; it relies on the union
+        reaching the page. A poem it could not grow around would hang."""
+        from redactor import render
+        for n in (1, 2, 7, 19, 20, 21, 60):
+            ws = self._words([i * 20 for i in range(n)])
+            for keep in ([0], [n - 1], [0, n - 1], list(range(n))):
+                shown = sum(hi - lo + 1 for lo, hi in render.window(ws, keep))
+                assert shown >= min(render.PAGE_LINES, n)
+
+    def test_the_window_centres_on_the_poem(self):
+        from redactor import render
+        ws = self._words([n * 20 for n in range(60)])
+        (lo, hi), = render.window(ws, keep=[30])
+        assert lo < 30 < hi
+
+    def test_the_window_stops_at_a_page_shorter_than_the_floor(self):
+        from redactor import render
+        assert render.window(self._words([0, 20, 40]), keep=[1]) == [[0, 2]]
+
+    def test_a_poem_spread_far_apart_stacks_rather_than_spanning(self):
+        """The ballad whose halves sat 2,000 pixels apart."""
+        from redactor import render
+        ws = self._words([n * 20 for n in range(200)])
+        ranges = render.window(ws, keep=[0, 199])
+        assert len(ranges) == 2
+        assert sum(hi - lo + 1 for lo, hi in ranges) < 200
+
+    def test_a_poem_the_page_never_placed_frames_nothing(self):
+        from redactor import render
+        from redactor.source import Word
+        ws = [*self._words([0, 20]), Word("ghost")]
+        assert render.window(ws, keep=[2]) == []
+
 
 class TestChallengePages:
     def test_spots_a_bot_wall(self):
@@ -605,10 +651,37 @@ class TestHalo:
         _, _, right, _ = render._halo([0], ws, pad=20)
         assert right == 140 + (20 - render.SAFETY) // 2
 
-    def test_holds_back_a_safety_margin(self):
-        """OCR boxes can sit inside their own glyphs, so an exact half-gap is
-        not a safe stopping place."""
+    def test_pads_even_where_the_neighbour_leaves_no_room(self):
+        """OCR boxes sitting inside their own glyphs cuts both ways.
+
+        Stopping the chip at its own box clips its own first letter. Measured
+        at twice scale, a run whose neighbour sat 12 pixels off got one pixel
+        of pad and lost the stem of its "t".
+        """
         ws = self.row(("kept", 100, 40), ("next", 140 + render.SAFETY, 40))
+        _, _, right, _ = render._halo([0], ws, pad=20)
+        assert right > 140
+
+    def test_the_floor_still_stops_short_of_the_neighbours_box(self):
+        ws = self.row(("kept", 100, 40), ("next", 140 + render.SAFETY, 40))
+        _, _, right, _ = render._halo([0], ws, pad=20)
+        assert right <= 140 + render.SAFETY
+
+    def test_never_takes_more_than_half_the_gap(self):
+        """A floor that only stopped at the neighbour's box overrode SAFETY.
+
+        Measured before this bound: 524 of 536 word gaps on one page reached
+        further than they had, and the black style, whose pad equals the
+        floor, had SAFETY stop binding at every gap.
+        """
+        for gap in range(40):
+            ws = self.row(("kept", 100, 40), ("next", 140 + gap, 40))
+            _, _, right, _ = render._halo([0], ws, pad=20)
+            assert right - 140 <= gap // 2, f"gap {gap}: took {right - 140}"
+
+    def test_a_touching_neighbour_gets_no_pad_at_all(self):
+        """The floor is bounded by the gap, so a gap of nothing gives nothing."""
+        ws = self.row(("kept", 100, 40), ("next", 140, 40))
         _, _, right, _ = render._halo([0], ws, pad=20)
         assert right == 140
 
@@ -860,43 +933,57 @@ class TestTsvParsing:
         assert [w.text for w in got] == ["real"]
 
 
-class TestGapClosing:
+class TestFraming:
     def _spread(self, tops):
         from redactor.source import Word
         return [Word("w", left=10, top=t, width=40, height=12, line=f"P-{t}")
                 for t in tops]
 
-    def test_a_poem_on_one_line_is_left_alone(self, monkeypatch, tmp_path):
+    def _calls(self, monkeypatch, tmp_path, tops, keep, height):
         from redactor import render
         calls = []
         monkeypatch.setattr(render, "_run", calls.append)
-        monkeypatch.setattr(render, "page_height", lambda *a, **k: 400)
-        out = render._close_the_gaps(tmp_path / "r.png", self._spread([0, 10]),
-                                     [0, 1], (0, 0, 500, 100), "magick")
-        assert out == tmp_path / "r.png"
-        assert not calls          # nothing to close
+        monkeypatch.setattr(render, "page_height", lambda *a, **k: height)
+        render._frame(tmp_path / "r.png", self._spread(tops), keep,
+                      (0, 0, 500, height), "magick")
+        return calls
 
-    def test_a_poem_split_down_a_page_is_stacked(self, monkeypatch, tmp_path):
-        from redactor import render
-        calls = []
-        monkeypatch.setattr(render, "_run", calls.append)
-        monkeypatch.setattr(render, "page_height", lambda *a, **k: 9000)
-        render._close_the_gaps(tmp_path / "r.png", self._spread([0, 4000, 8000]),
-                               [0, 1, 2], (0, 0, 500, 9000), "magick")
-        crops = [c for c in calls if "-crop" in c]
-        assert len(crops) == 3            # one band per line that carries words
+    def test_a_poem_in_the_middle_of_a_page_is_one_crop(self, monkeypatch,
+                                                        tmp_path):
+        calls = self._calls(monkeypatch, tmp_path,
+                            [n * 30 for n in range(40)], [20], 9000)
+        assert len([c for c in calls if "-crop" in c]) == 1
+        assert not any("-append" in c for c in calls)
+
+    def test_a_poem_spread_down_a_long_page_is_stacked(self, monkeypatch,
+                                                       tmp_path):
+        """The ballad whose halves sat 2,000 pixels apart."""
+        calls = self._calls(monkeypatch, tmp_path,
+                            [n * 30 for n in range(200)], [0, 199], 9000)
+        assert len([c for c in calls if "-crop" in c]) == 2
         assert any("-append" in c for c in calls)
 
-    def test_each_band_is_short(self, monkeypatch, tmp_path):
-        from redactor import render
-        calls = []
-        monkeypatch.setattr(render, "_run", calls.append)
-        monkeypatch.setattr(render, "page_height", lambda *a, **k: 9000)
-        render._close_the_gaps(tmp_path / "r.png", self._spread([0, 4000]),
-                               [0, 1], (0, 0, 500, 9000), "magick")
+    def test_each_band_carries_the_page_around_the_poem(self, monkeypatch,
+                                                        tmp_path):
+        """What the old framing got wrong: a band cut to the glyphs.
+
+        Eight line pitches is the floor here because the window divides its
+        line budget between the two bands.
+        """
+        calls = self._calls(monkeypatch, tmp_path,
+                            [n * 30 for n in range(200)], [0, 199], 9000)
         for c in calls:
-            if "-crop" in c:
-                geom = c[c.index("-crop") + 1]
-                assert int(geom.split("x")[1].split("+")[0]) < 100
-                # page coordinates, not shifted by a crop origin
-                assert int(geom.split("+")[2]) in (0, 3988)
+            if "-crop" not in c:
+                continue
+            geom = c[c.index("-crop") + 1]
+            assert int(geom.split("x")[1].split("+")[0]) >= 8 * 30
+
+    def test_the_bands_stay_in_page_coordinates(self, monkeypatch, tmp_path):
+        """Both styles composite onto the page, so a band needs no shift."""
+        calls = self._calls(monkeypatch, tmp_path,
+                            [n * 30 for n in range(200)], [0, 199], 9000)
+        origins = [int(c[c.index("-crop") + 1].split("+")[2])
+                   for c in calls if "-crop" in c]
+        assert origins[0] == 0
+        assert origins[1] > 5000
+
