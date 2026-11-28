@@ -53,6 +53,35 @@ SAFETY = 4
 """Pixels held back from the gap between a kept run and its neighbour, to
 absorb the difference between an OCR box and the ink it reports."""
 
+GLYPH_FLOOR = 3
+"""Pixels a kept run gets either side whatever its neighbours leave.
+
+The same slack SAFETY allows for runs the other way: a box sitting inside its
+own glyph clips that glyph when the chip stops at the box. Measured on a page
+captured at twice scale, a run whose neighbour sat 12 pixels off got a single
+pixel of pad and lost the stem of its first letter.
+
+Bounded by half the gap, because a floor that only stopped at the neighbour's
+box would override SAFETY wherever the gap is under `SAFETY + 2 * GLYPH_FLOOR`,
+which is most of them: 524 of 536 word gaps on one page, and every gap at all
+wherever the caller's pad is no larger than the floor."""
+
+FRAME_PAD = 8
+"""Paper kept above and below the lines the window shows.
+
+Without it the crop lands on the glyphs of the first and last line, which
+reads as a cut rather than as the edge of a page."""
+
+PAGE_LINES = 20
+"""Lines of type the finished image holds, when the page has that many.
+
+A floor, not a target. Without one, a poem that survives in two lines renders
+as two lines, and an erasure with no page around it is a strip rather than a
+page somebody went at with a brush."""
+
+CONTEXT_LINES = 3
+"""Lines kept either side of each surviving line before the window grows."""
+
 BASELINE_TEXT = 12.0
 """Median word height, in pixels, of body type in a screenshot taken at one
 device pixel per CSS pixel.
@@ -85,15 +114,14 @@ def _runs(indices: list[int], words) -> list[list[int]]:
     return out
 
 
-def column(words, margin: int = MARGIN, keep: list[int] | None = None,
+def column(words, margin: int = MARGIN,
            page_height: int = 0) -> tuple[int, int, int, int]:
-    """The region to cover: the text column's width, the poem's height.
+    """The region to cover: every line of type the page put down.
 
-    Width comes from every word, so erased lines keep their measure. Height
-    comes from the surviving ones, because a poem drawn from a long document
-    sits in a few lines and everything above the first and below the last is
-    covering with nothing under it. One section of a statute rendered the
-    whole way gave 2,101 pixels for two lines of poem.
+    Coverage is all or nothing. Narrowing it to the lines the poem survives on
+    leaves the rest of the page readable, which is not an erasure. A one-line
+    poem covered that way handed 255 of the page's 292 words back to OCR.
+    What the finished image shows is a separate question, answered by `window`.
 
     `page_height` clamps the bottom to the capture. A box reaching past it
     crops to a 1x1 image, which ImageMagick reports as success, so a line of
@@ -102,16 +130,120 @@ def column(words, margin: int = MARGIN, keep: list[int] | None = None,
     placed = [w for w in words if w.placed]
     if not placed:
         raise ValueError("render needs positioned words; read the page first")
-    vertical = [words[i] for i in keep if words[i].placed] if keep else placed
-    if not vertical:
-        vertical = placed
-    bottom = max(w.top + w.height for w in vertical) + margin
+    bottom = max(w.top + w.height for w in placed) + margin
     if page_height:
         bottom = min(bottom, page_height)
     return (min(w.left for w in placed) - margin,
-            max(0, min(w.top for w in vertical) - margin),
+            max(0, min(w.top for w in placed) - margin),
             max(w.left + w.width for w in placed) + margin,
             bottom)
+
+
+def _bands(words, indices: list[int] | None = None) -> list[list[int]]:
+    """The lines of type, as [top, bottom] pairs in page order.
+
+    Words on one line rarely agree on a top to the pixel, so rows within
+    `slack` of each other are the same line.
+    """
+    chosen = [words[i] for i in indices] if indices is not None else list(words)
+    rows = sorted({(w.top, w.top + w.height) for w in chosen if w.placed})
+    if not rows:
+        return []
+    bands, slack = [list(rows[0])], 2
+    for top, bottom in rows[1:]:
+        if top <= bands[-1][1] + slack:
+            bands[-1][1] = max(bands[-1][1], bottom)
+        else:
+            bands.append([top, bottom])
+    return bands
+
+
+def _merge(ranges: list[list[int]]) -> list[list[int]]:
+    out: list[list[int]] = []
+    for lo, hi in sorted(ranges):
+        if out and lo <= out[-1][1] + 1:
+            out[-1][1] = max(out[-1][1], hi)
+        else:
+            out.append([lo, hi])
+    return out
+
+
+def window(words, keep: list[int], page_lines: int = PAGE_LINES,
+           context: int = CONTEXT_LINES) -> list[list[int]]:
+    """Which lines of the covered page the finished image shows.
+
+    Returned as inclusive index ranges into `_bands(words)`.
+
+    A poem sits in a few lines of a long document, which leaves two bad
+    framings either side of this one. Show exactly the surviving lines and the
+    image is a strip two glyphs tall with no page around it. Show everything
+    between the first and the last and a ballad whose halves were 2,000 pixels
+    apart gives mostly covering with nothing under it. So each surviving line
+    gets `context` lines either side, the runs grow together until the image
+    holds `page_lines` of type, and whatever gaps survive that are closed by
+    stacking the runs.
+    """
+    lines = _bands(words)
+    if not lines:
+        return []
+    at = sorted({n for i in keep if words[i].placed
+                 for n, (top, bottom) in enumerate(lines)
+                 if top <= words[i].top <= bottom})
+    if not at:
+        return []
+
+    last = len(lines) - 1
+    ranges = _merge([[max(0, n - context), min(last, n + context)] for n in at])
+    budget = min(page_lines, len(lines))
+    # The budget is the only stop. A pass that widens nothing has to mean the
+    # ranges already span the page, where the sum has reached `len(lines)` and
+    # the budget can be no larger than that, so the loop has already ended.
+    while sum(hi - lo + 1 for lo, hi in ranges) < budget:
+        for r in ranges:
+            r[0], r[1] = max(0, r[0] - 1), min(last, r[1] + 1)
+        ranges = _merge(ranges)
+    return ranges
+
+
+def _spans(lines, ranges, pad: int, limit: int) -> list[tuple[int, int]]:
+    """Top and height of each run of lines the finished image shows.
+
+    One routine, because `covered` has to cover exactly what `_frame` goes on
+    to crop. Computing it twice is how a band that gets covered and a band
+    that gets shown drift apart, and the gap between them is page nobody
+    erased.
+    """
+    out = []
+    for lo, hi in ranges:
+        top = max(0, lines[lo][0] - pad)
+        bottom = min(limit, lines[hi][1] + pad)
+        if bottom > top:
+            out.append((top, bottom - top))
+    return out
+
+
+def covered(lines, ranges, limit: int, unit: float) -> tuple[int, int]:
+    """Top and bottom of the only strip of page worth covering.
+
+    `_frame` throws away everything outside the window, so brushing the rest
+    is work that never reaches the image. Measured on the Hacker News
+    guidelines, covering this band rather than the whole column took the
+    whiteout from 51.4 seconds to 21.7.
+
+    The band runs past the window's own crop by the fluid's pad and its tear,
+    so the torn edge of the stroke falls outside the visible image instead of
+    across the top of it.
+
+    Whenever `_frame` finds nothing to crop it hands back the whole page, so
+    the whole page is what this covers in that case. Both read the same
+    `_spans`, which is what keeps them in step.
+    """
+    spans = _spans(lines, ranges, round(FRAME_PAD * unit), limit)
+    if not spans:
+        return 0, limit
+    reach = round((FLUID_PAD + TEAR) * unit)
+    return (max(0, spans[0][0] - reach),
+            min(limit, spans[-1][0] + spans[-1][1] + reach))
 
 
 def page_height(png: Path, magick: str = "magick") -> int:
@@ -268,8 +400,8 @@ def _brush(size: tuple[int, int], passes: int, dest: Path, magick: str,
     return dest
 
 
-def _halo(span: list[int], words, pad: int,
-          safety: int = SAFETY) -> tuple[int, int, int, int]:
+def _halo(span: list[int], words, pad: int, safety: int = SAFETY,
+          floor: int = GLYPH_FLOOR) -> tuple[int, int, int, int]:
     """The box restored for one kept run: the run, plus paper around it.
 
     The halo is what makes a run look brushed around rather than cut out, but
@@ -307,7 +439,7 @@ def _halo(span: list[int], words, pad: int,
     below = [w.top for w in over if w.top >= bottom]
 
     def share(gap):
-        return max(0, min(pad, (gap - safety) // 2))
+        return max(0, min(pad, max(min(floor, gap // 2), (gap - safety) // 2)))
 
     lp = pad if not before else share(left - max(before))
     rp = pad if not after else share(min(after) - right)
@@ -340,9 +472,13 @@ def _spare_the_type(mask: Path, span: list[int], words, left: int, top: int,
     return mask
 
 
-def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Path:
-    safety = round(SAFETY * text_unit(words))
+def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
+           band: tuple[int, int] | None = None) -> Path:
+    unit = text_unit(words)
+    safety, floor = round(SAFETY * unit), round(GLYPH_FLOOR * unit)
     x0, y0, x1, y1 = box
+    if band:
+        y0, y1 = max(y0, band[0]), min(y1, band[1])
     work = dest.parent
     base = work / "_base.png"
     _run([magick, str(png), "-fill", "black",
@@ -350,7 +486,7 @@ def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Pa
 
     cmd = [magick, str(base)]
     for n, span in enumerate(_runs(sorted(keep), words)):
-        left, top, right, bottom = _halo(span, words, pad, safety)
+        left, top, right, bottom = _halo(span, words, pad, safety, floor)
         chip = work / f"_chip{n}.png"
         _run([magick, str(png), "-crop",
               f"{right - left}x{bottom - top}+{left}+{top}", "+repage", str(chip)])
@@ -364,7 +500,7 @@ def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Pa
 
 def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
               seed: int | None, color: str | None,
-              limit: int = 0) -> Path:
+              limit: int = 0, band: tuple[int, int] | None = None) -> Path:
     # Two boxes, because they answer different questions. The paper is sampled
     # from the wider one, so a page whose text runs to the edge of its column
     # still offers enough background to find a mode in. The fluid is laid over
@@ -373,14 +509,18 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
     work = dest.parent
     fluid = color or fluid_color(page_background(png, box, magick))
     unit = text_unit(words)
-    x0, y0, x1, y1 = column(words, round(FLUID_PAD * unit), keep=keep,
-                            page_height=limit)
+    x0, y0, x1, y1 = column(words, round(FLUID_PAD * unit), page_height=limit)
+    if band:
+        y0, y1 = max(y0, band[0]), min(y1, band[1])
     w, h = x1 - x0, y1 - y0
 
     # One pass per line of type: the fluid was dragged along the lines, so
     # that is the scale its passes vary at, and the scale its edges wander at.
+    # Counted over the lines being covered, so a band holding a tenth of the
+    # page gets a tenth of the passes rather than the whole page's worth.
     placed = [w_ for w_ in words if w_.placed]
-    passes = max(2, len({w_.line for w_ in placed}))
+    under = [w_ for w_ in placed if y0 <= w_.top <= y1] or placed
+    passes = max(2, len({w_.line for w_ in under}))
     line_h = max(6.0, sorted(w_.height for w_ in placed)[len(placed) // 2] * 1.4)
     streaks = _brush((w, h), passes, work / "_brush.png", magick, seed, unit)
 
@@ -417,7 +557,9 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
 
     cmd = [magick, str(base)]
     for n, span in enumerate(_runs(sorted(keep), words)):
-        left, top, right, bottom = _halo(span, words, pad, round(SAFETY * unit))
+        left, top, right, bottom = _halo(span, words, pad,
+                                         round(SAFETY * unit),
+                                         round(GLYPH_FLOOR * unit))
         cw, ch = right - left, bottom - top
         chip = work / f"_chip{n}.png"
         mask = _ragged((cw, ch), round(5 * unit),
@@ -447,61 +589,47 @@ def erase(png: Path, words, keep: list[int], dest: Path,
     if style not in STYLES:
         raise ValueError(f"unknown style {style!r}; expected one of {STYLES}")
     unit = text_unit(words)
-    box = column(words, round(MARGIN * unit), keep=keep,
-                 page_height=page_height(png, magick))
     limit = page_height(png, magick)
+    box = column(words, round(MARGIN * unit), page_height=limit)
+    ranges = window(words, keep)
+    band = covered(_bands(words), ranges, limit, unit)
     if style == "whiteout":
         out = _whiteout(png, words, keep, dest, box,
-                        round(max(pad, 7) * unit), magick, seed, color, limit)
+                        round(max(pad, 7) * unit), magick, seed, color, limit,
+                        band)
     else:
-        out = _black(png, words, keep, dest, box, round(pad * unit), magick)
-    return _close_the_gaps(out, words, keep, box, magick)
+        out = _black(png, words, keep, dest, box, round(pad * unit), magick,
+                     band)
+    return _frame(out, words, keep, box, magick, ranges)
 
 
-def _close_the_gaps(rendered: Path, words, keep, box, magick: str) -> Path:
-    """Drop the covered lines that hold nothing, and stack what is left.
-
-    A poem drawn from a long article lands in a few lines separated by
-    thousands of pixels. Rendering the span between them is faithful to the
-    page and unreadable: one ballad put its two halves 2,000 pixels apart with
-    nothing in between but covering. What remains is every line that still
-    carries words, in order, with the emptiness between them gone.
+def _frame(rendered: Path, words, keep, box, magick: str,
+           ranges: list[list[int]] | None = None) -> Path:
+    """Crop the covered page down to the window, stacking it where it breaks.
 
     Done after the fact rather than inside each style, because both render one
     box and neither would otherwise need to know about the other's geometry.
     """
-    kept = [words[i] for i in keep if words[i].placed]
-    rows = sorted({(w.top, w.top + w.height) for w in kept})
-    bands, slack = [list(rows[0])], 2
-    for top, bottom in rows[1:]:
-        if top <= bands[-1][1] + slack:
-            bands[-1][1] = max(bands[-1][1], bottom)
-        else:
-            bands.append([top, bottom])
-    if len(bands) < 2:
-        return rendered
+    lines = _bands(words)
+    if ranges is None:
+        ranges = window(words, keep)
 
     x0, _, x1, _ = box
-    width = x1 - x0
-    total = page_height(rendered, magick)
+    width, total = x1 - x0, page_height(rendered, magick)
+    spans = _spans(lines, ranges, round(FRAME_PAD * text_unit(words)), total)
+    if not spans:
+        return rendered
+
+    # Both styles composite onto the page rather than onto a crop of it, so
+    # the render is already in page coordinates and a band needs no shift.
     work, strips = rendered.parent, []
-    for n, (top, bottom) in enumerate(bands):
-        # Both styles composite onto the page rather than onto a crop of it,
-        # so the render is already in page coordinates and the band needs no
-        # shift. Pad by the gap to the next band, bounded, so a line keeps
-        # some paper under it rather than being cut at the glyphs.
-        gap = min(24, (bands[n + 1][0] - bottom) // 2) if n + 1 < len(bands) else 12
-        top_in = max(0, top - 12)
-        high = min(total - top_in, (bottom - top) + 12 + max(gap, 4))
-        if high <= 0:
-            continue
+    for n, (top, high) in enumerate(spans):
         strip = work / f"_band{n}.png"
         _run([magick, str(rendered), "-crop",
-              f"{width}x{high}+{max(0, x0)}+{top_in}", "+repage", str(strip)])
+              f"{width}x{high}+{max(0, x0)}+{top}", "+repage", str(strip)])
         strips.append(str(strip))
-
-    if len(strips) > 1:
-        _run([magick, *strips, "-append", str(rendered)])
+    _run([magick, *strips, *(["-append"] if len(strips) > 1 else []),
+          str(rendered)])
     for f in work.glob("_band*.png"):
         f.unlink(missing_ok=True)
     return rendered

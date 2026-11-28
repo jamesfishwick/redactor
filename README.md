@@ -114,17 +114,21 @@ a / it / the / week. / Start / Ollama / exactly / partners / connector / guideli
 
 Two styles. `black` lays an opaque bar over the erased words. `whiteout` is the default, and imitates correction fluid brushed over a printed page, after Mary Ruefle's _A Little White Shadow_: strokes dragged along the lines of type, ragged where they stop, thin in places so the covered words ghost through.
 
-![The Hacker News guidelines page under correction fluid beside the same page with its whole text column blacked out, the same two phrases left in white boxes on both](docs/whiteout-vs-black.png)
+![The Hacker News guidelines under correction fluid beside the same page blacked out. On the left a near-white page, the masthead and the erased lines showing as faint ghosts, two surviving phrases sitting in black on the cream the page already had. On the right the same two phrases in white boxes on a solid black field](docs/whiteout-vs-black.png)
 
 The fluid is mixed from the page rather than fixed. Sampling Ruefle's scan gives paper at `(237,212,188)` and fluid at `(244,240,242)`, so the rule is to take most of the color out of the background and raise its lightness. Applied to that same paper it returns `(245,243,241)`. That keeps the two in one family on any page, instead of dropping a white that belongs to no page onto a cream one or a dark one. `--fluid '#f5f3f1'` overrides it.
 
 Hacker News reads `(250,250,240)`, so the fluid lands at white and the kept words stay on the cream the page already had. What is left of the covered text is the ghost showing through the thin places.
 
-![A detail of a page covered in white correction fluid, the erased lines showing through as faint ghosts, two surviving phrases sitting on the cream the page already had](docs/whiteout-cream-page.png)
+![A detail of the same page at full size. One surviving phrase in crisp black on a faintly warm patch of the page's own background, the erased line continuing past it as a ghost, the lines above and below ghosting too](docs/whiteout-cream-page.png)
 
 The fluid is never darker than the paper. Fluid sits on top of a page and catches more light than the page does, so mixing it darker reverses what the eye reads: the covered column turns into a wash, the paper around each surviving word turns into the brightest thing on the page, and the erasure looks applied to the words that were kept. Paper already at white gets fluid at white, and the stroke reads by its edges and its texture instead. A page can look blank where its words came out. It cannot look painted over the words that stayed.
 
 Neither style draws only over the words that were erased. The whole text column is covered first and the surviving words are composited back, because anything OCR failed to read would otherwise stay on the page. The whiteout is not fully opaque, so what ghosts through is bounded two ways: the column is blurred before it is covered, and the fluid never thins past `GHOST_FLOOR`. What shows is a word's shape and none of its letters.
+
+Coverage takes in every line whatever the poem keeps. Narrowing it to the lines the poem survives on is the cheap way to avoid rendering a lot of empty page, and it stops being an erasure: measured on an essay page, a one-line poem covered that way handed 255 of the page's 292 words back to OCR.
+
+So the framing is decided separately, and it is the part that keeps the result a page. A poem drawn from a long article survives in a handful of lines. Cropped to those lines it is a strip two glyphs tall with nothing around it, and stretched from the first surviving line to the last it is mostly covering with nothing underneath, which is what one ballad gave when its two halves landed 2,000 pixels apart. The render keeps `CONTEXT_LINES` either side of every line the poem survives on, grows those runs outward until the image holds `PAGE_LINES` of type, and stacks them where the poem was spread too far for them to meet. A page with fewer lines than the floor is shown whole. A one-line poem still comes out a page.
 
 Both styles take `--seed`, and the same seed renders the same page. That holds within one ImageMagick build. The noise generator is free to change between versions, so a seed is not a durable description of a render.
 

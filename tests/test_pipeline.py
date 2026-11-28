@@ -446,31 +446,115 @@ class TestNamedSection:
         assert len(named_section(r, "start", cap=500)) == 500
 
 
-class TestTightCrop:
+class TestCoverageAndWindow:
     def _words(self, tops):
         from redactor.source import Word
         return [Word("w", left=10, top=t, width=20, height=10, line=f"P-{t}")
                 for t in tops]
 
-    def test_height_follows_the_kept_words(self):
+    def test_coverage_reaches_every_line_whatever_the_poem_keeps(self):
+        """Narrowing coverage to the poem's own lines is how a render leaks.
+
+        Measured on an essay page: a poem surviving in one line left 255 of
+        the page's 292 words legible to OCR in the finished image.
+        """
         from redactor.render import column
-        _, top, _, bottom = column(self._words([0, 5000, 9000]), margin=5,
-                                   keep=[1])
-        assert bottom - top < 100
+        _, top, _, bottom = column(self._words([0, 5000, 9000]), margin=5)
+        assert top <= 0
+        assert bottom >= 9010
 
     def test_width_still_spans_the_column(self):
         from redactor.render import column
         from redactor.source import Word
         w = [Word("a", left=10, top=0, width=20, height=10, line="P-0"),
              Word("b", left=500, top=0, width=20, height=10, line="P-0")]
-        left, _, right, _ = column(w, margin=5, keep=[0])
+        left, _, right, _ = column(w, margin=5)
         assert right - left > 500
 
     def test_the_box_stops_at_the_capture(self):
         from redactor.render import column
-        _, _, _, bottom = column(self._words([0, 9000]), margin=5, keep=[1],
+        _, _, _, bottom = column(self._words([0, 9000]), margin=5,
                                  page_height=4000)
         assert bottom <= 4000
+
+    def test_a_one_line_poem_still_gets_a_page(self):
+        from redactor import render
+        ws = self._words([n * 20 for n in range(40)])
+        shown = sum(hi - lo + 1 for lo, hi in render.window(ws, keep=[0]))
+        assert shown >= render.PAGE_LINES
+
+    def test_the_window_grows_to_a_page_on_any_arrangement(self):
+        """The growth loop has no stop of its own; it relies on the union
+        reaching the page. A poem it could not grow around would hang."""
+        from redactor import render
+        for n in (1, 2, 7, 19, 20, 21, 60):
+            ws = self._words([i * 20 for i in range(n)])
+            for keep in ([0], [n - 1], [0, n - 1], list(range(n))):
+                shown = sum(hi - lo + 1 for lo, hi in render.window(ws, keep))
+                assert shown >= min(render.PAGE_LINES, n)
+
+    def test_the_window_centres_on_the_poem(self):
+        from redactor import render
+        ws = self._words([n * 20 for n in range(60)])
+        (lo, hi), = render.window(ws, keep=[30])
+        assert lo < 30 < hi
+
+    def test_the_window_stops_at_a_page_shorter_than_the_floor(self):
+        from redactor import render
+        assert render.window(self._words([0, 20, 40]), keep=[1]) == [[0, 2]]
+
+    def test_a_poem_spread_far_apart_stacks_rather_than_spanning(self):
+        """The ballad whose halves sat 2,000 pixels apart."""
+        from redactor import render
+        ws = self._words([n * 20 for n in range(200)])
+        ranges = render.window(ws, keep=[0, 199])
+        assert len(ranges) == 2
+        assert sum(hi - lo + 1 for lo, hi in ranges) < 200
+
+    def test_the_covered_band_reaches_past_what_is_shown(self):
+        """The fluid's torn edge has to land outside the visible crop.
+
+        Covering exactly the window would draw the tear across the top and
+        bottom of the image instead of off them.
+        """
+        from redactor import render
+        ws = self._words([i * 20 for i in range(60)])
+        lines, unit = render._bands(ws), render.text_unit(ws)
+        ranges = render.window(ws, keep=[30])
+        top, bottom = render.covered(lines, ranges, 1200, unit)
+        shown = round(render.FRAME_PAD * unit)
+        assert top < lines[ranges[0][0]][0] - shown
+        assert bottom > lines[ranges[-1][1]][1] + shown
+
+    def test_a_page_with_nothing_to_show_is_covered_whole(self):
+        """`_frame` returns that page uncropped, so all of it stays visible."""
+        from redactor import render
+        assert render.covered(render._bands(self._words([0, 20])), [], 900,
+                              1.0) == (0, 900)
+
+    def test_what_is_covered_always_holds_what_is_shown(self):
+        """The band and the crop read the same `_spans`, so the band can
+        never fall short of what `_frame` goes on to cut out."""
+        from redactor import render
+        for n in (1, 3, 21, 60):
+            ws = self._words([i * 20 for i in range(n)])
+            lines, unit = render._bands(ws), render.text_unit(ws)
+            limit = n * 20 + 40
+            for keep in ([0], [n - 1], [0, n - 1]):
+                ranges = render.window(ws, keep)
+                top, bottom = render.covered(lines, ranges, limit, unit)
+                for t, h in render._spans(lines, ranges,
+                                          round(render.FRAME_PAD * unit),
+                                          limit):
+                    assert top <= t, f"{n} lines, keep {keep}: band starts late"
+                    assert t + h <= bottom, f"{n} lines, keep {keep}: band ends early"
+
+    def test_a_poem_the_page_never_placed_frames_nothing(self):
+        from redactor import render
+        from redactor.source import Word
+        ws = [*self._words([0, 20]), Word("ghost")]
+        assert render.window(ws, keep=[2]) == []
+
 
 class TestChallengePages:
     def test_spots_a_bot_wall(self):
@@ -605,10 +689,37 @@ class TestHalo:
         _, _, right, _ = render._halo([0], ws, pad=20)
         assert right == 140 + (20 - render.SAFETY) // 2
 
-    def test_holds_back_a_safety_margin(self):
-        """OCR boxes can sit inside their own glyphs, so an exact half-gap is
-        not a safe stopping place."""
+    def test_pads_even_where_the_neighbour_leaves_no_room(self):
+        """OCR boxes sitting inside their own glyphs cuts both ways.
+
+        Stopping the chip at its own box clips its own first letter. Measured
+        at twice scale, a run whose neighbour sat 12 pixels off got one pixel
+        of pad and lost the stem of its "t".
+        """
         ws = self.row(("kept", 100, 40), ("next", 140 + render.SAFETY, 40))
+        _, _, right, _ = render._halo([0], ws, pad=20)
+        assert right > 140
+
+    def test_the_floor_still_stops_short_of_the_neighbours_box(self):
+        ws = self.row(("kept", 100, 40), ("next", 140 + render.SAFETY, 40))
+        _, _, right, _ = render._halo([0], ws, pad=20)
+        assert right <= 140 + render.SAFETY
+
+    def test_never_takes_more_than_half_the_gap(self):
+        """A floor that only stopped at the neighbour's box overrode SAFETY.
+
+        Measured before this bound: 524 of 536 word gaps on one page reached
+        further than they had, and the black style, whose pad equals the
+        floor, had SAFETY stop binding at every gap.
+        """
+        for gap in range(40):
+            ws = self.row(("kept", 100, 40), ("next", 140 + gap, 40))
+            _, _, right, _ = render._halo([0], ws, pad=20)
+            assert right - 140 <= gap // 2, f"gap {gap}: took {right - 140}"
+
+    def test_a_touching_neighbour_gets_no_pad_at_all(self):
+        """The floor is bounded by the gap, so a gap of nothing gives nothing."""
+        ws = self.row(("kept", 100, 40), ("next", 140, 40))
         _, _, right, _ = render._halo([0], ws, pad=20)
         assert right == 140
 
@@ -672,6 +783,86 @@ class TestErasePixels:
              "-format", "%[fx:standard_deviation]", "info:"],
             capture_output=True, text=True, check=True).stdout
         return float(out)
+
+    def lines_page(self, tmp_path, n=20, pitch=18, h=12):
+        """A page of type, so keeping one line leaves nineteen to cover.
+
+        The two-word fixture cannot catch coverage narrowed to the poem's own
+        lines, because both its words sit on the one line and there is nothing
+        else to narrow away.
+        """
+        png = tmp_path / "lines.png"
+        draw = []
+        for i in range(n):
+            y = 20 + i * pitch
+            draw += ["-draw", f"rectangle 40,{y} 240,{y + h}"]
+        subprocess.run(["magick", "-size", f"400x{20 + n * pitch + 20}",
+                        "xc:#edd4bc", "-fill", "#2a2018", *draw, str(png)],
+                       check=True)
+        return (png,
+                [Word(f"w{i}", left=40, top=20 + i * pitch, width=200,
+                      height=h, line=f"L{i}") for i in range(n)],
+                20 + n * pitch + 20)
+
+    def live_rows(self, png, h=12):
+        """Row bands whose spread still reads as ink on paper.
+
+        Cropped to tiles in one call, because `-format` over the resulting
+        sequence prints a line per tile. A call per band put four minutes on
+        the suite.
+        """
+        w = subprocess.run(["magick", "identify", "-format", "%w", str(png)],
+                           capture_output=True, text=True, check=True).stdout
+        spread = subprocess.run(
+            ["magick", str(png), "-crop", f"{w}x{h}", "+repage",
+             "-colorspace", "Gray", "-format", "%[fx:standard_deviation]\n",
+             "info:"], capture_output=True, text=True, check=True).stdout
+        return sum(1 for line in spread.split() if float(line) > 0.15)
+
+    def chip_bands(self, ws, keep, h=12):
+        """Row bands the restored run can light on its own.
+
+        The run comes back with paper around it, so what reads as ink in the
+        output is the halo, not the word, and it can straddle one more band
+        than its own height covers. Derived rather than fixed, because the
+        halo is the style's pad clamped against the leading, and a bound
+        written down as a number goes stale the moment either moves.
+        """
+        _, top, _, bottom = render._halo(keep, ws,
+                                         round(7 * render.text_unit(ws)))
+        return (bottom - top) // h + 2
+
+    @pytest.mark.parametrize("style", ["black", "whiteout"])
+    def test_a_poem_on_one_line_still_covers_the_rest(self, tmp_path, style):
+        """Coverage narrowed to the poem's lines left the others readable.
+
+        Measured against the code before the fix: all 24 row bands of this
+        page still read as type, in both styles. The poem keeps one.
+        """
+        png, ws, _ = self.lines_page(tmp_path)
+        assert self.live_rows(png) > 20, "fixture is not a page of type"
+        dest = render.erase(png, ws, [1], tmp_path / f"lines_{style}.png",
+                            style=style, seed=1)
+        assert self.live_rows(dest) <= self.chip_bands(ws, [1]), \
+            "a line the poem dropped survived"
+
+    @pytest.mark.parametrize("style", ["black", "whiteout"])
+    def test_the_band_covers_everything_the_crop_shows(self, tmp_path, style):
+        """A page longer than the window, so the covered band is a strip.
+
+        The fixture above holds exactly `PAGE_LINES`, so its window is the
+        whole page and the band clamps nothing. Only a longer page puts the
+        band's edges inside the paper, which is where a band falling short of
+        the crop would show as type along the top or bottom of the image.
+        """
+        png, ws, height = self.lines_page(tmp_path, n=32)
+        band = render.covered(render._bands(ws), render.window(ws, [16]),
+                              height, render.text_unit(ws))
+        assert band != (0, height), "fixture stopped clamping the band"
+        dest = render.erase(png, ws, [16], tmp_path / f"band_{style}.png",
+                            style=style, seed=1)
+        assert self.live_rows(dest) <= self.chip_bands(ws, [16]), \
+            "the band fell short of the crop"
 
     @pytest.mark.parametrize("style", ["black", "whiteout"])
     def test_the_erased_word_goes_and_the_kept_word_stays(self, tmp_path, style):
@@ -860,43 +1051,57 @@ class TestTsvParsing:
         assert [w.text for w in got] == ["real"]
 
 
-class TestGapClosing:
+class TestFraming:
     def _spread(self, tops):
         from redactor.source import Word
         return [Word("w", left=10, top=t, width=40, height=12, line=f"P-{t}")
                 for t in tops]
 
-    def test_a_poem_on_one_line_is_left_alone(self, monkeypatch, tmp_path):
+    def _calls(self, monkeypatch, tmp_path, tops, keep, height):
         from redactor import render
         calls = []
         monkeypatch.setattr(render, "_run", calls.append)
-        monkeypatch.setattr(render, "page_height", lambda *a, **k: 400)
-        out = render._close_the_gaps(tmp_path / "r.png", self._spread([0, 10]),
-                                     [0, 1], (0, 0, 500, 100), "magick")
-        assert out == tmp_path / "r.png"
-        assert not calls          # nothing to close
+        monkeypatch.setattr(render, "page_height", lambda *a, **k: height)
+        render._frame(tmp_path / "r.png", self._spread(tops), keep,
+                      (0, 0, 500, height), "magick")
+        return calls
 
-    def test_a_poem_split_down_a_page_is_stacked(self, monkeypatch, tmp_path):
-        from redactor import render
-        calls = []
-        monkeypatch.setattr(render, "_run", calls.append)
-        monkeypatch.setattr(render, "page_height", lambda *a, **k: 9000)
-        render._close_the_gaps(tmp_path / "r.png", self._spread([0, 4000, 8000]),
-                               [0, 1, 2], (0, 0, 500, 9000), "magick")
-        crops = [c for c in calls if "-crop" in c]
-        assert len(crops) == 3            # one band per line that carries words
+    def test_a_poem_in_the_middle_of_a_page_is_one_crop(self, monkeypatch,
+                                                        tmp_path):
+        calls = self._calls(monkeypatch, tmp_path,
+                            [n * 30 for n in range(40)], [20], 9000)
+        assert len([c for c in calls if "-crop" in c]) == 1
+        assert not any("-append" in c for c in calls)
+
+    def test_a_poem_spread_down_a_long_page_is_stacked(self, monkeypatch,
+                                                       tmp_path):
+        """The ballad whose halves sat 2,000 pixels apart."""
+        calls = self._calls(monkeypatch, tmp_path,
+                            [n * 30 for n in range(200)], [0, 199], 9000)
+        assert len([c for c in calls if "-crop" in c]) == 2
         assert any("-append" in c for c in calls)
 
-    def test_each_band_is_short(self, monkeypatch, tmp_path):
-        from redactor import render
-        calls = []
-        monkeypatch.setattr(render, "_run", calls.append)
-        monkeypatch.setattr(render, "page_height", lambda *a, **k: 9000)
-        render._close_the_gaps(tmp_path / "r.png", self._spread([0, 4000]),
-                               [0, 1], (0, 0, 500, 9000), "magick")
+    def test_each_band_carries_the_page_around_the_poem(self, monkeypatch,
+                                                        tmp_path):
+        """What the old framing got wrong: a band cut to the glyphs.
+
+        Eight line pitches is the floor here because the window divides its
+        line budget between the two bands.
+        """
+        calls = self._calls(monkeypatch, tmp_path,
+                            [n * 30 for n in range(200)], [0, 199], 9000)
         for c in calls:
-            if "-crop" in c:
-                geom = c[c.index("-crop") + 1]
-                assert int(geom.split("x")[1].split("+")[0]) < 100
-                # page coordinates, not shifted by a crop origin
-                assert int(geom.split("+")[2]) in (0, 3988)
+            if "-crop" not in c:
+                continue
+            geom = c[c.index("-crop") + 1]
+            assert int(geom.split("x")[1].split("+")[0]) >= 8 * 30
+
+    def test_the_bands_stay_in_page_coordinates(self, monkeypatch, tmp_path):
+        """Both styles composite onto the page, so a band needs no shift."""
+        calls = self._calls(monkeypatch, tmp_path,
+                            [n * 30 for n in range(200)], [0, 199], 9000)
+        origins = [int(c[c.index("-crop") + 1].split("+")[2])
+                   for c in calls if "-crop" in c]
+        assert origins[0] == 0
+        assert origins[1] > 5000
+
