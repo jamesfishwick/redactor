@@ -91,7 +91,7 @@ def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
         scheme = SCHEMES.get(name)
         patterns = meter.split("/") if meter else None
 
-        def draw(space):
+        def draw(space, cap=None):
             """Sample this space and keep the poems the table cannot vet.
 
             Stress is enforced while the table is built, so every draw already
@@ -116,9 +116,10 @@ def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
                 # that would have given a haiku at once.
                 return space.sample(sample, rng)
             kept, tries = [], 0
-            while (len(kept) < sample and tries < max_draws
+            limit = min(cap, max_draws) if cap else max_draws
+            while (len(kept) < sample and tries < limit
                    and time.monotonic() < deadline):
-                batch = space.sample(min(sample * 2, max_draws - tries), rng)
+                batch = space.sample(min(sample * 2, limit - tries), rng)
                 if not batch:
                     break
                 tries += len(batch)
@@ -135,15 +136,36 @@ def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
             if classes is None:
                 classes = sorted(rhyme_classes(words).items(),
                                  key=lambda kv: -len(kv[1]))[:rhyme_tries]
-            space = drawn = None
+            # Score every class before drawing from any of them. How many
+            # distinct words a class holds says little about how many poems it
+            # admits: on one 1,975-word page the class with the most words
+            # admitted 34 couplets and the richest admitted 9,213. Taking the
+            # first class that worked therefore settled for an arbitrary
+            # corner of the form. Each table is dropped once counted, because
+            # twenty-five of them resident at once is the memory this avoids,
+            # and rebuilding the winner costs one build.
+            scored = []
             for part, _members in classes:
                 trial = Space(words, FORMS[name], max_runs=max_runs,
                               meter=meter, scheme=scheme, parts={"A": part})
-                if trial.count() >= want:
-                    got = draw(trial)
-                    if len(got) >= want:
-                        space, drawn = trial, got
-                        break
+                count = trial.count()
+                del trial
+                if count >= want:
+                    scored.append((count, part))
+                if time.monotonic() >= deadline:
+                    break
+            scored.sort(reverse=True)
+
+            space = drawn = None
+            for _count, part in scored:
+                trial = Space(words, FORMS[name], max_runs=max_runs,
+                              meter=meter, scheme=scheme, parts={"A": part})
+                # A class giving nothing usable in twenty batches is not worth
+                # the time the next class needs.
+                got = draw(trial, cap=sample * 20)
+                if len(got) >= want:
+                    space, drawn = trial, got
+                    break
                 if time.monotonic() >= deadline:
                     break
             if space is None:
