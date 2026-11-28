@@ -143,7 +143,7 @@ def is_challenge(words) -> bool:
 
 def read(url: str, png, *, width: int = 1100, height: int = 1400,
          timeout: int = 45000, settle: int = 2500, section: str = "",
-         body_only: bool = True, log=None) -> Read | None:
+         body_only: bool = True, log=None, rng=None) -> Read | None:
     """Screenshot the page and return its words with exact boxes.
 
     The screenshot is full-page so that every box the DOM reports falls inside
@@ -187,7 +187,13 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
                 pass             # a page that blocks the CDN still gets read
             raw = page.evaluate(EXTRACT)
             title = page.title()
-            kept = _choose(raw, body_only, section)
+            kept = _choose(raw, body_only, section, rng)
+            if log and kept and not section and len(kept) < len(raw):
+                # Which part of a long page was drawn, so a reader can ask
+                # for a different one by name instead of guessing why the
+                # poem came from where it did.
+                head = " ".join(w["t"] for w in kept[:7])
+                log(f"read {len(kept)} words of {len(raw)}, starting \"{head}\"")
             if not kept or is_challenge([w["t"] for w in kept]):
                 browser.close()
                 return None
@@ -268,7 +274,7 @@ MARK_ARTICLE = r"""() => {
 }"""
 
 
-def _choose(raw, body_only: bool, section: str):
+def _choose(raw, body_only: bool, section: str, rng=None):
     """The words to work with, decided before the browser closes."""
     pool = [w for w in raw if not (body_only and w["chrome"])]
     if not pool:
@@ -277,7 +283,7 @@ def _choose(raw, body_only: bool, section: str):
         named = _named_raw(pool, section)
         if named:
             return named
-    return _largest_raw(pool)
+    return _a_section(pool, rng)
 
 
 def _named_raw(pool, start: str):
@@ -302,14 +308,41 @@ def _named_raw(pool, start: str):
     return pool[begin:end]
 
 
-def _largest_raw(pool, floor: int = 150):
+# Where the enumerator stops reading. A section longer than this is rendered
+# and then truncated, so the words past it cost time and buy nothing.
+SECTION_CAP = 15000
+
+
+def _a_section(pool, rng=None, floor: int = 150):
+    """One section of a long page, drawn rather than maximised.
+
+    Taking the longest looks like a measurement and is a choice. Chapter 1 of
+    Title 17 holds 48 sections, 22 of them long enough to erase, and the
+    maximum returns the same 17,754 words of royalty provisions every time;
+    section 107, the one about fair use, is 184 words and never comes up.
+
+    Nothing here can tell which is worth erasing, so this stops implying it
+    can. A section is drawn with weight proportional to its length, because
+    more words do buy a wider choice of poem, and the weight is capped where
+    the enumerator stops reading so one enormous section cannot take every
+    run. Ask for a section by name and none of this applies.
+
+    This is the third place in this codebase where a cheap maximum stood in
+    for a sample: `all()` returned the front of an enumeration, and a rhymed
+    form took the first class that worked.
+    """
+    import random
+
     if len(pool) < floor * 2:
         return pool
     runs: dict[int, list] = {}
     for w in pool:
         runs.setdefault(w.get("sec", 0), []).append(w)
-    best = max(runs.values(), key=len)
-    return best if len(best) >= floor else pool
+    eligible = [v for v in runs.values() if len(v) >= floor]
+    if not eligible:
+        return pool
+    weights = [min(len(v), SECTION_CAP) for v in eligible]
+    return (rng or random.Random()).choices(eligible, weights=weights)[0]
 
 
 def _clip(kept, width: int) -> dict:
