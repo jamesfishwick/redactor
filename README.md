@@ -101,7 +101,13 @@ a / it / the / week. / Start / Ollama / exactly / partners / connector / guideli
 
 Two styles. `black` lays an opaque bar over the erased words. `whiteout` is the default, and imitates correction fluid brushed over a printed page, after Mary Ruefle's _A Little White Shadow_: strokes dragged along the lines of type, ragged where they stop, thin in places so the covered words ghost through.
 
+![The Hacker News guidelines page under correction fluid beside the same page with its whole text column blacked out, the same two phrases left in white boxes on both](docs/whiteout-vs-black.png)
+
 The fluid is mixed from the page rather than fixed. Sampling Ruefle's scan gives paper at `(237,212,188)` and fluid at `(244,240,242)`, so the rule is to take most of the color out of the background and raise its lightness. Applied to that same paper it returns `(245,243,241)`. That keeps the two in one family on any page, instead of dropping a white that belongs to no page onto a cream one or a dark one. `--fluid '#f5f3f1'` overrides it.
+
+Hacker News reads `(250,250,240)`, so the fluid lands at white and the kept words stay on the cream the page already had. What is left of the covered text is the ghost showing through the thin places.
+
+![A detail of a page covered in white correction fluid, the erased lines showing through as faint ghosts, two surviving phrases sitting on the cream the page already had](docs/whiteout-cream-page.png)
 
 The fluid is never darker than the paper. Fluid sits on top of a page and catches more light than the page does, so mixing it darker reverses what the eye reads: the covered column turns into a wash, the paper around each surviving word turns into the brightest thing on the page, and the erasure looks applied to the words that were kept. Paper already at white gets fluid at white, and the stroke reads by its edges and its texture instead. A page can look blank where its words came out. It cannot look painted over the words that stayed.
 
