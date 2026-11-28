@@ -143,7 +143,7 @@ def is_challenge(words) -> bool:
 
 def read(url: str, png, *, width: int = 1100, height: int = 1400,
          timeout: int = 45000, settle: int = 2500, section: str = "",
-         body_only: bool = True) -> Read | None:
+         body_only: bool = True, log=None) -> Read | None:
     """Screenshot the page and return its words with exact boxes.
 
     The screenshot is full-page so that every box the DOM reports falls inside
@@ -163,6 +163,13 @@ def read(url: str, png, *, width: int = 1100, height: int = 1400,
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
+        # Worth distinguishing from a page that would not read. Without this
+        # the whole DOM path vanishes and the caller falls back to OCR, which
+        # is the slower reader giving worse words, and says nothing about why.
+        if log:
+            log("playwright is not installed, so the DOM cannot be read. "
+                "Install it with `uv sync --extra browser` and "
+                "`playwright install chromium`.")
         return None
 
     from .source import Word
@@ -389,7 +396,7 @@ def read_page(url: str, png, *, width: int = 1100, height: int = 5000,
     # The section is chosen inside the read, not after it. The capture is
     # clipped to whatever was chosen, so asking afterwards would clip to the
     # wrong part of the page and then look for the section in it.
-    got = read(url, png, width=width, section=section)
+    got = read(url, png, width=width, section=section, log=log)
     if got is not None:
         shot, words = Path(got.png), got.words
         if section and len(words) < least and log:

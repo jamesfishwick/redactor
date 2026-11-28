@@ -10,6 +10,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The DOM reader is the primary one and this is what it runs on. It is an
+# extra rather than a dependency because the wheel is useless without
+# `playwright install chromium`, which is a separate download the installer
+# has to choose. Undeclared, it was present only where someone had installed
+# it by hand, and its absence is quiet: the import sits behind a try.
+browser = ["playwright>=1.40"]
 pos = ["spacy>=3.7"]
 render = []
 llm = ["anthropic>=0.40"]
