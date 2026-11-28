@@ -121,7 +121,9 @@ GALLERY_HEAD = """# Gallery
 Every erasure this agent has published, newest first. Each one deletes words
 from a single page and keeps the rest in their original order.
 
-This file is written by the agent. Nothing here is hand-edited.
+The agent writes this file. It was pruned once by hand, after the reader
+learned to skip page furniture: several early entries had erased a cookie
+banner or a nav bar rather than an article.
 
 """
 
