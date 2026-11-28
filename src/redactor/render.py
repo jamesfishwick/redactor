@@ -316,6 +316,30 @@ def _halo(span: list[int], words, pad: int,
     return left - lp, top - tp, right + rp, bottom + bp
 
 
+def _spare_the_type(mask: Path, span: list[int], words, left: int, top: int,
+                    magick: str) -> Path:
+    """Force the mask opaque over the words themselves.
+
+    The torn edge is what makes a restored run read as brushwork rather than
+    as a rectangle, and it erodes inward from the edges of the chip. `_halo`
+    gives that tear somewhere to happen by padding the run, but it clamps the
+    pad against the neighbour it must not expose, and on a justified line
+    there is nothing to give: one statute put a kept word flush against the
+    next with a pad of zero while the tear reached seven pixels in, which ate
+    the final `l` of `shall` and published a poem ending in `shal`.
+
+    So the tear is allowed the margin and nothing else. Where a run has room
+    its edge still wanders; where it has none the type survives whole.
+    """
+    l0 = min(words[j].left for j in span) - left
+    t0 = min(words[j].top for j in span) - top
+    l1 = max(words[j].left + words[j].width for j in span) - left
+    t1 = max(words[j].top + words[j].height for j in span) - top
+    _run([magick, str(mask), "-fill", "white", "-stroke", "white",
+          "-draw", f"rectangle {l0},{t0} {l1},{t1}", str(mask)])
+    return mask
+
+
 def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Path:
     safety = round(SAFETY * text_unit(words))
     x0, y0, x1, y1 = box
@@ -396,9 +420,10 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
         left, top, right, bottom = _halo(span, words, pad, round(SAFETY * unit))
         cw, ch = right - left, bottom - top
         chip = work / f"_chip{n}.png"
+        mask = _ragged((cw, ch), round(5 * unit),
+                       work / f"_cmask{n}.png", magick, seed, n + 1)
         _run([magick, str(png), "-crop", f"{cw}x{ch}+{left}+{top}", "+repage",
-              str(_ragged((cw, ch), round(5 * unit),
-                          work / f"_cmask{n}.png", magick, seed, n + 1)),
+              str(_spare_the_type(mask, span, words, left, top, magick)),
               "-alpha", "off", "-compose", "CopyOpacity", "-composite", str(chip)])
         cmd += [str(chip), "-geometry", f"+{left}+{top}", "-composite"]
     cmd.append(str(dest))

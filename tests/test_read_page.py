@@ -135,3 +135,39 @@ class TestRankerSaysWhy:
         pool, words = self._pool()
         rank.by_model(pool, words, "u", connection="chosen-by-caller")
         assert seen["connection"] == "chosen-by-caller"
+
+
+class TestTearSparesTheType:
+    """The torn edge may wander in the margin and nowhere else."""
+
+    def _span(self):
+        # Two words flush against each other, as a justified line sets them.
+        return [Word("is", left=100, top=50, width=20, height=12),
+                Word("shall", left=124, top=50, width=40, height=12)]
+
+    def test_the_mask_is_forced_opaque_over_the_words(self, monkeypatch,
+                                                      tmp_path):
+        from redactor import render
+        drawn = []
+        monkeypatch.setattr(render, "_run", drawn.append)
+        words = self._span()
+        mask = tmp_path / "m.png"
+        # chip origin sits 7px left and above the run, the tear's reach
+        render._spare_the_type(mask, [0, 1], words, left=93, top=43,
+                               magick="magick")
+        rect = next(c[c.index("-draw") + 1] for c in drawn if "-draw" in c)
+        assert rect == "rectangle 7,7 71,19"
+
+    def test_the_rectangle_covers_every_word_in_the_run(self, monkeypatch,
+                                                        tmp_path):
+        # The right edge has to come from the last word, not the first: the
+        # bug this guards published a poem ending in "shal".
+        from redactor import render
+        drawn = []
+        monkeypatch.setattr(render, "_run", drawn.append)
+        words = self._span()
+        render._spare_the_type(tmp_path / "m.png", [0, 1], words,
+                               left=100, top=50, magick="magick")
+        rect = next(c[c.index("-draw") + 1] for c in drawn if "-draw" in c)
+        right = int(rect.split()[-1].split(",")[0])
+        assert right == 64                      # 124 + 40 - 100
