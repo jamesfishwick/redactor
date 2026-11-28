@@ -784,7 +784,7 @@ class TestErasePixels:
             capture_output=True, text=True, check=True).stdout
         return float(out)
 
-    def lines_page(self, tmp_path, n=20, pitch=28, h=24):
+    def lines_page(self, tmp_path, n=20, pitch=18, h=12):
         """A page of type, so keeping one line leaves nineteen to cover.
 
         The two-word fixture cannot catch coverage narrowed to the poem's own
@@ -799,24 +799,38 @@ class TestErasePixels:
         subprocess.run(["magick", "-size", f"400x{20 + n * pitch + 20}",
                         "xc:#edd4bc", "-fill", "#2a2018", *draw, str(png)],
                        check=True)
-        return png, [Word(f"w{i}", left=40, top=20 + i * pitch, width=200,
-                          height=h, line=f"L{i}") for i in range(n)]
+        return (png,
+                [Word(f"w{i}", left=40, top=20 + i * pitch, width=200,
+                      height=h, line=f"L{i}") for i in range(n)],
+                20 + n * pitch + 20)
 
-    def live_rows(self, png, h=24):
-        """Row bands whose spread still reads as ink on paper."""
-        w, total = subprocess.run(
-            ["magick", "identify", "-format", "%w %h", str(png)],
-            capture_output=True, text=True, check=True).stdout.split()
-        live = 0
-        for y in range(0, int(total) - h, h):
-            spread = subprocess.run(
-                ["magick", str(png), "-crop", f"{w}x{h}+0+{y}", "+repage",
-                 "-colorspace", "Gray", "-format",
-                 "%[fx:standard_deviation]", "info:"],
-                capture_output=True, text=True, check=True).stdout
-            if float(spread) > 0.15:
-                live += 1
-        return live
+    def live_rows(self, png, h=12):
+        """Row bands whose spread still reads as ink on paper.
+
+        Cropped to tiles in one call, because `-format` over the resulting
+        sequence prints a line per tile. A call per band put four minutes on
+        the suite.
+        """
+        w = subprocess.run(["magick", "identify", "-format", "%w", str(png)],
+                           capture_output=True, text=True, check=True).stdout
+        spread = subprocess.run(
+            ["magick", str(png), "-crop", f"{w}x{h}", "+repage",
+             "-colorspace", "Gray", "-format", "%[fx:standard_deviation]\n",
+             "info:"], capture_output=True, text=True, check=True).stdout
+        return sum(1 for line in spread.split() if float(line) > 0.15)
+
+    def chip_bands(self, ws, keep, h=12):
+        """Row bands the restored run can light on its own.
+
+        The run comes back with paper around it, so what reads as ink in the
+        output is the halo, not the word, and it can straddle one more band
+        than its own height covers. Derived rather than fixed, because the
+        halo is the style's pad clamped against the leading, and a bound
+        written down as a number goes stale the moment either moves.
+        """
+        _, top, _, bottom = render._halo(keep, ws,
+                                         round(7 * render.text_unit(ws)))
+        return (bottom - top) // h + 2
 
     @pytest.mark.parametrize("style", ["black", "whiteout"])
     def test_a_poem_on_one_line_still_covers_the_rest(self, tmp_path, style):
@@ -825,11 +839,30 @@ class TestErasePixels:
         Measured against the code before the fix: all 24 row bands of this
         page still read as type, in both styles. The poem keeps one.
         """
-        png, ws = self.lines_page(tmp_path)
+        png, ws, _ = self.lines_page(tmp_path)
         assert self.live_rows(png) > 20, "fixture is not a page of type"
         dest = render.erase(png, ws, [1], tmp_path / f"lines_{style}.png",
                             style=style, seed=1)
-        assert self.live_rows(dest) <= 2, "a line the poem dropped survived"
+        assert self.live_rows(dest) <= self.chip_bands(ws, [1]), \
+            "a line the poem dropped survived"
+
+    @pytest.mark.parametrize("style", ["black", "whiteout"])
+    def test_the_band_covers_everything_the_crop_shows(self, tmp_path, style):
+        """A page longer than the window, so the covered band is a strip.
+
+        The fixture above holds exactly `PAGE_LINES`, so its window is the
+        whole page and the band clamps nothing. Only a longer page puts the
+        band's edges inside the paper, which is where a band falling short of
+        the crop would show as type along the top or bottom of the image.
+        """
+        png, ws, height = self.lines_page(tmp_path, n=32)
+        band = render.covered(render._bands(ws), render.window(ws, [16]),
+                              height, render.text_unit(ws))
+        assert band != (0, height), "fixture stopped clamping the band"
+        dest = render.erase(png, ws, [16], tmp_path / f"band_{style}.png",
+                            style=style, seed=1)
+        assert self.live_rows(dest) <= self.chip_bands(ws, [16]), \
+            "the band fell short of the crop"
 
     @pytest.mark.parametrize("style", ["black", "whiteout"])
     def test_the_erased_word_goes_and_the_kept_word_stays(self, tmp_path, style):
