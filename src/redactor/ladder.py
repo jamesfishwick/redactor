@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass
 
 from .candidates import Space
-from .prosody import FORMS, METERS, SCHEMES, normalize, rhyme_classes, scans
+from .prosody import FORMS, METERS, SCHEMES, normalize, rhyme_classes, scans, violations
 
 # hardest first
 RUNGS: tuple[str, ...] = (
@@ -64,7 +64,7 @@ class Rung:
 
 
 def _draw(space, words, *, patterns, scheme, sample, max_draws, deadline,
-          rng, cap=None):
+          rng, cap=None, max_viols=1):
     """Sample a space and keep the poems the table cannot vet.
 
     Stress is enforced while the table is built, so every draw already scans
@@ -80,10 +80,27 @@ def _draw(space, words, *, patterns, scheme, sample, max_draws, deadline,
     keeps one past the iteration that made it.
     """
     def usable(c):
-        if patterns and not all(
-                scans([words[i].text for i in line], pat)
-                for line, pat in zip(c.lines, patterns, strict=False)):
-            return False
+        if patterns:
+            lines = [[words[i].text for i in line] for line in c.lines]
+            if not all(scans(ln, pat)
+                       for ln, pat in zip(lines, patterns, strict=False)):
+                return False
+            # Then the real parser, over the lines the cheap check let past.
+            # It is the only thing here that can see a line of content
+            # monosyllables for what it is. About 30ms a line, which a sample
+            # can afford and a table cannot.
+            # One violation is the measured line between a metre a reader
+            # would allow and one it would not. On 165 accepted pentameters
+            # from a single page, a quarter parse perfectly and two thirds
+            # come in at or under one, while the ten-content-monosyllable
+            # line scores five. Demanding nought rejects three draws in four
+            # and quadrupled the time to fill a sample.
+            for ln in lines:
+                v = violations(ln)
+                if v is None:
+                    break           # not installed, so the cheap check stands
+                if v > max_viols:
+                    return False
         return not scheme or _distinct(c, words, scheme)
 
     if not patterns and not scheme:
