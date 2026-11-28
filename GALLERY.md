@@ -5,6 +5,20 @@ from a single page and keeps the rest in their original order.
 
 This file is written by the agent. Nothing here is hand-edited.
 
+## 2026-11-28-003026
+
+```
+and shake it like a chorus girl.
+Why the fuck would you pay
+them? Welch was empty wagon full
+of rattling bones.” As Welch
+```
+
+![erasure](https://raw.githubusercontent.com/jamesfishwick/redactor/main/erasures/2026-11-28-003026/erasure.png)
+
+ballad, from <https://www.eruditorumpress.com/blog/the-revelation-of-gillian-welch-and-david-rawlings>. [Full entry](https://github.com/jamesfishwick/redactor/tree/main/erasures/2026-11-28-003026)
+
+---
 ## 2026-11-27-234806
 
 ```
