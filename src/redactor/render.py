@@ -202,6 +202,25 @@ def window(words, keep: list[int], page_lines: int = PAGE_LINES,
     return ranges
 
 
+def covered(lines, ranges, limit: int, unit: float) -> tuple[int, int]:
+    """Top and bottom of the only strip of page worth covering.
+
+    `_frame` throws away everything outside the window, so brushing the rest
+    is work that never reaches the image. On one page it was the difference
+    between 2.6 seconds and 52.
+
+    The band runs past the window's own crop by the fluid's pad and its tear,
+    so the torn edge of the stroke falls outside the visible image instead of
+    across the top of it. With no window to show, the whole page is covered,
+    because that is the case where `_frame` returns the page uncropped.
+    """
+    if not ranges:
+        return 0, limit
+    reach = round((FRAME_PAD + FLUID_PAD + TEAR) * unit)
+    return (max(0, min(lines[lo][0] for lo, _ in ranges) - reach),
+            min(limit, max(lines[hi][1] for _, hi in ranges) + reach))
+
+
 def page_height(png: Path, magick: str = "magick") -> int:
     # Judged by what it printed. A height that will not parse is reported as
     # zero either way, so the exit code adds nothing.
@@ -428,10 +447,13 @@ def _spare_the_type(mask: Path, span: list[int], words, left: int, top: int,
     return mask
 
 
-def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Path:
+def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
+           band: tuple[int, int] | None = None) -> Path:
     unit = text_unit(words)
     safety, floor = round(SAFETY * unit), round(GLYPH_FLOOR * unit)
     x0, y0, x1, y1 = box
+    if band:
+        y0, y1 = max(y0, band[0]), min(y1, band[1])
     work = dest.parent
     base = work / "_base.png"
     _run([magick, str(png), "-fill", "black",
@@ -453,7 +475,7 @@ def _black(png: Path, words, keep, dest: Path, box, pad: int, magick: str) -> Pa
 
 def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
               seed: int | None, color: str | None,
-              limit: int = 0) -> Path:
+              limit: int = 0, band: tuple[int, int] | None = None) -> Path:
     # Two boxes, because they answer different questions. The paper is sampled
     # from the wider one, so a page whose text runs to the edge of its column
     # still offers enough background to find a mode in. The fluid is laid over
@@ -463,12 +485,17 @@ def _whiteout(png: Path, words, keep, dest: Path, box, pad: int, magick: str,
     fluid = color or fluid_color(page_background(png, box, magick))
     unit = text_unit(words)
     x0, y0, x1, y1 = column(words, round(FLUID_PAD * unit), page_height=limit)
+    if band:
+        y0, y1 = max(y0, band[0]), min(y1, band[1])
     w, h = x1 - x0, y1 - y0
 
     # One pass per line of type: the fluid was dragged along the lines, so
     # that is the scale its passes vary at, and the scale its edges wander at.
+    # Counted over the lines being covered, so a band holding a tenth of the
+    # page gets a tenth of the passes rather than the whole page's worth.
     placed = [w_ for w_ in words if w_.placed]
-    passes = max(2, len({w_.line for w_ in placed}))
+    under = [w_ for w_ in placed if y0 <= w_.top <= y1] or placed
+    passes = max(2, len({w_.line for w_ in under}))
     line_h = max(6.0, sorted(w_.height for w_ in placed)[len(placed) // 2] * 1.4)
     streaks = _brush((w, h), passes, work / "_brush.png", magick, seed, unit)
 
@@ -539,21 +566,28 @@ def erase(png: Path, words, keep: list[int], dest: Path,
     unit = text_unit(words)
     limit = page_height(png, magick)
     box = column(words, round(MARGIN * unit), page_height=limit)
+    ranges = window(words, keep)
+    band = covered(_bands(words), ranges, limit, unit)
     if style == "whiteout":
         out = _whiteout(png, words, keep, dest, box,
-                        round(max(pad, 7) * unit), magick, seed, color, limit)
+                        round(max(pad, 7) * unit), magick, seed, color, limit,
+                        band)
     else:
-        out = _black(png, words, keep, dest, box, round(pad * unit), magick)
-    return _frame(out, words, keep, box, magick)
+        out = _black(png, words, keep, dest, box, round(pad * unit), magick,
+                     band)
+    return _frame(out, words, keep, box, magick, ranges)
 
 
-def _frame(rendered: Path, words, keep, box, magick: str) -> Path:
+def _frame(rendered: Path, words, keep, box, magick: str,
+           ranges: list[list[int]] | None = None) -> Path:
     """Crop the covered page down to the window, stacking it where it breaks.
 
     Done after the fact rather than inside each style, because both render one
     box and neither would otherwise need to know about the other's geometry.
     """
-    lines, ranges = _bands(words), window(words, keep)
+    lines = _bands(words)
+    if ranges is None:
+        ranges = window(words, keep)
     if not ranges:
         return rendered
 

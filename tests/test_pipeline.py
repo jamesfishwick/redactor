@@ -511,6 +511,27 @@ class TestCoverageAndWindow:
         assert len(ranges) == 2
         assert sum(hi - lo + 1 for lo, hi in ranges) < 200
 
+    def test_the_covered_band_reaches_past_what_is_shown(self):
+        """The fluid's torn edge has to land outside the visible crop.
+
+        Covering exactly the window would draw the tear across the top and
+        bottom of the image instead of off them.
+        """
+        from redactor import render
+        ws = self._words([i * 20 for i in range(60)])
+        lines, unit = render._bands(ws), render.text_unit(ws)
+        ranges = render.window(ws, keep=[30])
+        top, bottom = render.covered(lines, ranges, 1200, unit)
+        shown = round(render.FRAME_PAD * unit)
+        assert top < lines[ranges[0][0]][0] - shown
+        assert bottom > lines[ranges[-1][1]][1] + shown
+
+    def test_a_page_with_nothing_to_show_is_covered_whole(self):
+        """`_frame` returns that page uncropped, so all of it stays visible."""
+        from redactor import render
+        assert render.covered(render._bands(self._words([0, 20])), [], 900,
+                              1.0) == (0, 900)
+
     def test_a_poem_the_page_never_placed_frames_nothing(self):
         from redactor import render
         from redactor.source import Word
