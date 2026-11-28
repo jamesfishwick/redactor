@@ -22,9 +22,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from .candidates import Enumerator, Space
-from .prosody import (FORMS, METERS, SCHEMES, normalize,
-                      rhyme_classes, scans)
+from .candidates import Space
+from .prosody import FORMS, METERS, SCHEMES, normalize, rhyme_classes, scans
 
 # hardest first
 RUNGS: tuple[str, ...] = (
@@ -46,7 +45,7 @@ def _distinct(candidate, words, scheme: str) -> bool:
     table's own count and so includes the poems this rejects.
     """
     seen: dict[str, set[str]] = {}
-    for letter, line in zip(scheme, candidate.lines):
+    for letter, line in zip(scheme, candidate.lines, strict=False):
         if letter == "." or not line:
             continue
         word = normalize(words[line[-1]].text)
@@ -62,6 +61,48 @@ class Rung:
     metered: bool
     pool: int
     candidates: list
+
+
+def _draw(space, words, *, patterns, scheme, sample, max_draws, deadline,
+          rng, cap=None):
+    """Sample a space and keep the poems the table cannot vet.
+
+    Stress is enforced while the table is built, so every draw already scans
+    and none are thrown away. What the table cannot see is whether a line
+    offers any evidence that it scans: a line of ten monosyllables matches any
+    pattern. Nor can it see that two rhymed lines closed on the same word.
+    Both are properties of the finished poem, so they filter the sample, which
+    is small and costs nothing to walk again.
+
+    Takes its constraints as arguments rather than reading them from the rung
+    loop it is called in. A closure over the loop would read whatever the
+    variable held when it ran, which is correct only for as long as nobody
+    keeps one past the iteration that made it.
+    """
+    def usable(c):
+        if patterns and not all(
+                scans([words[i].text for i in line], pat)
+                for line, pat in zip(c.lines, patterns, strict=False)):
+            return False
+        return not scheme or _distinct(c, words, scheme)
+
+    if not patterns and not scheme:
+        # Every draw is usable, so there is nothing for a budget to bound.
+        # Gating this too meant a spent budget skipped the easy rungs as well,
+        # and the climb returned nothing from a page that would have given a
+        # haiku at once.
+        return space.sample(sample, rng)
+
+    kept, tries = [], 0
+    limit = min(cap, max_draws) if cap else max_draws
+    while (len(kept) < sample and tries < limit
+           and time.monotonic() < deadline):
+        batch = space.sample(min(sample * 2, limit - tries), rng)
+        if not batch:
+            break
+        tries += len(batch)
+        kept += [c for c in batch if usable(c)]
+    return kept
 
 
 def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
@@ -89,41 +130,6 @@ def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
         meter = METERS.get(name)
         scheme = SCHEMES.get(name)
         patterns = meter.split("/") if meter else None
-
-        def draw(space, cap=None):
-            """Sample this space and keep the poems the table cannot vet.
-
-            Stress is enforced while the table is built, so every draw already
-            scans and none are thrown away. What the table cannot see is
-            whether a line offers any evidence that it scans: a line of ten
-            monosyllables matches any pattern. Nor can it see that two rhymed
-            lines closed on the same word. Both are properties of the finished
-            poem, so they filter the sample, which is small and costs nothing
-            to walk again.
-            """
-            def usable(c):
-                if patterns and not all(
-                        scans([words[i].text for i in line], pat)
-                        for line, pat in zip(c.lines, patterns)):
-                    return False
-                return not scheme or _distinct(c, words, scheme)
-
-            if not patterns and not scheme:
-                # Every draw is usable, so there is nothing for a budget to
-                # bound. Gating this too meant a spent budget skipped the easy
-                # rungs as well, and the climb returned nothing from a page
-                # that would have given a haiku at once.
-                return space.sample(sample, rng)
-            kept, tries = [], 0
-            limit = min(cap, max_draws) if cap else max_draws
-            while (len(kept) < sample and tries < limit
-                   and time.monotonic() < deadline):
-                batch = space.sample(min(sample * 2, limit - tries), rng)
-                if not batch:
-                    break
-                tries += len(batch)
-                kept += [c for c in batch if usable(c)]
-            return kept
 
         if scheme:
             # One table per candidate rhyme class, biggest first. A class with
@@ -161,7 +167,9 @@ def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
                               meter=meter, scheme=scheme, parts={"A": part})
                 # A class giving nothing usable in twenty batches is not worth
                 # the time the next class needs.
-                got = draw(trial, cap=sample * 20)
+                got = _draw(trial, words, patterns=patterns, scheme=scheme,
+                           sample=sample, max_draws=max_draws,
+                           deadline=deadline, rng=rng, cap=sample * 20)
                 if len(got) >= want:
                     space, drawn = trial, got
                     break
@@ -175,7 +183,9 @@ def climb(words, *, max_runs=2, want=1, sample=60, max_draws=40000,
             pool = space.count()
             if pool < want:
                 continue
-            drawn = draw(space)
+            drawn = _draw(space, words, patterns=patterns, scheme=scheme,
+                    sample=sample, max_draws=max_draws,
+                    deadline=deadline, rng=rng)
 
         drawn = drawn[:sample]
         if len(drawn) >= want:
