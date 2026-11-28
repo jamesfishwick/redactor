@@ -2,6 +2,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from redactor import source
+
 import pytest
 
 from redactor import render
@@ -696,3 +698,162 @@ class TestErasePixels:
             ["magick", "compare", "-metric", "AE", str(a), str(b), "null:"],
             capture_output=True, text=True).stderr.strip().split()[0]
         assert differing == "0", f"{differing} pixels differ between seeds"
+
+
+class TestTsvParsing:
+    """Tesseract's TSV is tab separated and unquoted, but the words in it are
+    whatever was on the page, double quotes included."""
+
+    HEADER = ("level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\t"
+              "left\ttop\twidth\theight\tconf\ttext")
+
+    def tsv(self, *words):
+        """Word rows only, at level 5. Real output interleaves page, block,
+        paragraph and line rows, which test_hierarchy_rows_are_dropped covers
+        separately. A word may carry its own line key, since that key is what
+        render splits restored runs on."""
+        rows = [self.HEADER]
+        for n, word in enumerate(words, 1):
+            text, top, conf = word[:3]
+            block, par, line = word[3] if len(word) > 3 else (1, 1, 1)
+            rows.append(f"5\t1\t{block}\t{par}\t{line}\t{n}\t"
+                        f"{n * 50}\t{top}\t40\t12\t{conf}\t{text}")
+        return "\n".join(rows) + "\n"
+
+    def test_a_quoted_word_does_not_eat_the_rows_after_it(self):
+        """The bug this guards: the default CSV dialect treats a leading quote
+        as opening a quoted field and swallows every row up to the next one."""
+        got = source.words_from_tsv(self.tsv(
+            ("Call", 10, 99), ('"Did', 10, 99), ("you", 10, 99),
+            ("read", 10, 99), ('that"', 30, 99), ("afterward", 30, 99)))
+        assert [w.text for w in got] == ["Call", '"Did', "you", "read",
+                                         'that"', "afterward"]
+
+    def test_the_last_word_on_a_quoting_page_still_has_a_position(self):
+        """render.erase sizes its cover from the words it is handed, so losing
+        the last one shrinks the cover and leaves real text legible below it.
+        The position matters as much as the word."""
+        got = source.words_from_tsv(self.tsv(
+            ('"Did', 10, 99), ("afterward", 1492, 99)))
+        assert [w.text for w in got] == ['"Did', "afterward"]
+        assert max(w.top for w in got) == 1492
+
+    def test_an_unbalanced_quote_loses_nothing(self):
+        """Real pages open a quote that the screenshot cuts off before it
+        closes. Under the old dialect the remainder was swallowed into the
+        opening row, which kept that row's position and lost every other."""
+        got = source.words_from_tsv(self.tsv(
+            ("opening", 10, 99), ('"unclosed', 10, 99), ("tail", 900, 99)))
+        assert [w.text for w in got] == ["opening", '"unclosed', "tail"]
+
+    def test_a_balanced_quote_keeps_its_quotes(self):
+        """The axis an ordinary page actually hits. A word quoted at both ends
+        is a well formed quoted field, so the old dialect lost no row and no
+        position, and returned the word with its quotes stripped off. Nothing
+        that counts rows or checks positions can see that."""
+        got = source.words_from_tsv(self.tsv(
+            ("he", 10, 99), ('"work"', 10, 99), ('hard."', 10, 99),
+            ("ended", 10, 99)))
+        assert [w.text for w in got] == ["he", '"work"', 'hard."', "ended"]
+
+    def test_a_lone_quote_word_does_not_absorb_its_neighbours(self):
+        """Tesseract segments an opening quote as its own token. Under the old
+        dialect that token absorbed the rows after it and came back as a Word
+        whose text was raw TSV, carrying the quote glyph's own small box. The
+        bare quote is absent from the result either way, since normalize_ok
+        drops a token with no letters in it."""
+        got = source.words_from_tsv(self.tsv(
+            ("alpha", 10, 99), ('"', 10, 99), ("beta", 10, 99),
+            ("gamma", 10, 99)))
+        assert [w.text for w in got] == ["alpha", "beta", "gamma"]
+
+    def test_the_line_key_follows_the_row(self):
+        """render splits a restored run where this key changes, so a key that
+        goes empty or constant merges runs across a line break and composites
+        one chip over two lines of the page. Reordering its parts cannot merge
+        anything, since the triples stay distinct, but it mislabels them."""
+        got = source.words_from_tsv(self.tsv(
+            ("first", 10, 99, (1, 1, 1)), ("same", 10, 99, (1, 1, 1)),
+            ("other", 30, 99, (2, 3, 4))))
+        assert [w.line for w in got] == ["1-1-1", "1-1-1", "2-3-4"]
+
+    def test_hierarchy_rows_are_dropped(self):
+        """Every real page carries these. Tesseract emits one row per page,
+        block, paragraph and line alongside the word rows, each with an empty
+        text column and a confidence of -1. This asserts they never reach the
+        word list. Three separate guards drop them, so it pins the outcome and
+        not any one branch."""
+        rows = [self.HEADER,
+                "1\t1\t0\t0\t0\t0\t0\t0\t1000\t1500\t-1\t",
+                "4\t1\t1\t1\t1\t0\t50\t10\t200\t12\t-1\t",
+                "5\t1\t1\t1\t1\t1\t50\t10\t40\t12\t96.687843\tsurvivor"]
+        got = source.words_from_tsv("\n".join(rows) + "\n")
+        assert [w.text for w in got] == ["survivor"]
+
+    def test_geometry_reaches_the_word_intact(self):
+        """render.erase builds its cover from left plus width and top plus
+        height, so a transposition of any pair ships a wrong cover with every
+        text assertion still green."""
+        got = source.words_from_tsv(self.tsv(("one", 10, 99), ("two", 30, 99)))
+        assert [(w.left, w.top, w.width, w.height) for w in got] == [
+            (50, 10, 40, 12), (100, 30, 40, 12)]
+
+    def test_a_word_exactly_at_the_threshold_is_kept(self):
+        """The comparison is `conf < min_conf`, and nothing else pins which
+        side of it the boundary falls on."""
+        got = source.words_from_tsv(self.tsv(
+            ("kept", 10, source.MIN_CONF), ("dropped", 10, source.MIN_CONF - 1)))
+        assert [w.text for w in got] == ["kept"]
+
+    def test_min_conf_is_honoured_when_the_caller_sets_it(self):
+        """The parameter is public API now, and the default path never
+        exercises it."""
+        rows = self.tsv(("high", 10, 95), ("low", 10, 60))
+        assert [w.text for w in source.words_from_tsv(rows)] == ["high", "low"]
+        assert [w.text for w in source.words_from_tsv(rows, 90)] == ["high"]
+
+    def test_degenerate_input_yields_no_words(self):
+        assert source.words_from_tsv(self.HEADER + "\n") == []
+
+    def test_an_unparseable_conf_drops_the_row(self):
+        """The one column wrapped in a try and except, so it loses a word in
+        silence where its neighbours would raise."""
+        rows = (self.HEADER + "\n"
+                + "5\t1\t1\t1\t1\t1\t50\t10\t40\t12\t99\tgood\n"
+                + "5\t1\t1\t1\t1\t2\t99\t10\t40\t12\tNOPE\tvanishes\n")
+        assert [w.text for w in source.words_from_tsv(rows)] == ["good"]
+
+    def test_unparseable_geometry_raises(self):
+        """The asymmetry with conf above is not a design, it is where the
+        try and except happens to sit."""
+        rows = (self.HEADER + "\n"
+                + "5\t1\t1\t1\t1\t1\tXX\t10\t40\t12\t99\tboom\n")
+        with pytest.raises(ValueError):
+            source.words_from_tsv(rows)
+
+    def test_a_header_missing_any_column_is_refused(self):
+        """A missing conf is the one that matters. The except around float()
+        swallows its KeyError row by row, so the list empties in silence,
+        which is the failure the guard exists to refuse."""
+        cols = self.HEADER.split("\t")
+        for drop in ("conf", "left", "block_num"):
+            header = "\t".join(c for c in cols if c != drop)
+            rows = header + "\n5\t1\t1\t1\t1\t1\t50\t10\t40\t12\t99\tword\n"
+            with pytest.raises(ValueError, match=drop):
+                source.words_from_tsv(rows)
+
+    def test_a_stream_with_no_header_is_refused(self):
+        """DictReader takes the first line as the header, so a caller that
+        strips it loses a word and gets no error. Refuse instead."""
+        headerless = "5\t1\t1\t1\t1\t1\t50\t10\t40\t12\t99\tword\n"
+        with pytest.raises(ValueError, match="header"):
+            source.words_from_tsv(headerless)
+
+    def test_low_confidence_words_are_still_dropped(self):
+        got = source.words_from_tsv(
+            self.tsv(("solid", 10, 96), ("junk", 10, 12)))
+        assert [w.text for w in got] == ["solid"]
+
+    def test_words_without_letters_are_still_dropped(self):
+        got = source.words_from_tsv(self.tsv(("real", 10, 96), ("--", 10, 96)))
+        assert [w.text for w in got] == ["real"]
