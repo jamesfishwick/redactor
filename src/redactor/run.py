@@ -17,7 +17,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import agent, publish, rank, sources
+from . import agent, publish, rank, render, sources
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,8 +27,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--out", type=Path, default=Path("/tmp/redactor"))
     p.add_argument("--runs", type=int, default=2)
     p.add_argument("--no-llm", action="store_true")
-    p.add_argument("--mode", default="whiteout", choices=["whiteout", "blackout"],
-                   help="bars over what went (default) or a field with the poem showing")
+    p.add_argument("--style", default="whiteout", choices=sorted(render.STYLES),
+                   help="how the erased words are covered: 'whiteout' brushes "
+                        "correction fluid mixed from the page, 'black' lays "
+                        "an opaque bar")
+    p.add_argument("--fluid", metavar="COLOR",
+                   help="override the whiteout color; by default it is mixed "
+                        "from the page")
     p.add_argument("--dry-run", action="store_true",
                    help="say what it would do and publish nothing")
     return p
@@ -86,9 +91,9 @@ def main(argv=None) -> int:
     if chosen is None:
         chosen = rank.arbitrary(rung.candidates)
 
-    from . import render
     image = render.erase(shot, words, chosen.indices(),
-                         args.out / "erasure.png", mode=args.mode)
+                         args.out / "erasure.png", style=args.style,
+                         seed=args.seed, color=args.fluid)
     poem = chosen.render(words)
 
     written = publish.publish(conn, args.repo, url=url, poem=poem,

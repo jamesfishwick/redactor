@@ -18,6 +18,9 @@ llm = ["anthropic>=0.40"]
 redactor = "redactor.cli:main"
 redactor-agent = "redactor.run:main"
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

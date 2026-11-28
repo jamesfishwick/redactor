@@ -53,15 +53,24 @@ def normalize_ok(token: str) -> bool:
 
 
 def screenshot(url: str, png: Path, width: int = 1000, height: int = 1500,
-               chrome: str | None = None, full_page: bool = False) -> Path:
+               chrome: str | None = None, full_page: bool = False,
+               scale: int = 2) -> Path:
     """Render the page. The explicit user-agent matters: a default headless
-    string gets a bot challenge on a good fraction of real sites."""
+    string gets a bot challenge on a good fraction of real sites.
+
+    `scale` is device pixels per CSS pixel, so the layout is unchanged and only
+    the sampling gets finer. It pays twice. Tesseract reads small type more
+    confidently with more pixels under it, and words it reports are words the
+    erasure can both use and cover. The brush texture and the torn edges then
+    have the resolution to read as marks rather than as stair steps.
+    """
     exe = chrome or find_chrome()
     if exe is None:
         raise RuntimeError("no chrome/chromium binary found")
     args = [
         exe, "--headless=new", "--disable-gpu", "--hide-scrollbars",
         "--no-sandbox", f"--window-size={width},{height}",
+        f"--force-device-scale-factor={scale}",
         f"--user-agent={UA}", f"--screenshot={png}",
         "--virtual-time-budget=15000",
     ]
