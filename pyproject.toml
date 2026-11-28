@@ -16,6 +16,10 @@ dependencies = [
 # has to choose. Undeclared, it was present only where someone had installed
 # it by hand, and its absence is quiet: the import sits behind a try.
 browser = ["playwright>=1.40"]
+# Optimality Theory scansion, which is the only thing here that can tell a
+# line of content monosyllables from iambic pentameter. An extra because it
+# brings pandas with it, and the ladder reports when it is absent.
+meter = ["prosodic>=3.6"]
 pos = ["spacy>=3.7"]
 render = []
 llm = ["anthropic>=0.40"]

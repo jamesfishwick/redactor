@@ -250,3 +250,41 @@ class TestSectionIsDrawn:
         from redactor import dom
         pool = [{"t": "a", "chrome": False, "sec": 0} for _ in range(50)]
         assert len(dom._a_section(pool)) == 50
+
+
+class TestRealScansion:
+    """CMU gives a monosyllable no stress, so ten of them match anything."""
+
+    def test_the_library_separates_what_the_digits_cannot(self):
+        from redactor.prosody import violations
+        good = violations(["When", "I", "do", "count", "the", "clock", "that", "tells", "the", "time"])
+        junk = violations(["cat", "dog", "bird", "hawk", "fish", "owl", "wren", "finch", "crow", "jay"])
+        if good is None:
+            pytest.skip("prosodic is not installed")
+        assert good == 0
+        assert junk > 1
+
+    def test_the_cheap_check_cannot_separate_them(self):
+        # Both pass `scans`, which is the whole reason the parser is here.
+        from redactor.prosody import scans
+        pat = "0101010101"
+        assert scans(["When", "I", "do", "count", "the", "clock", "that", "tells", "the", "time"], pat)
+        assert scans(["cat", "dog", "bird", "hawk", "fish", "owl", "wren", "finch", "crow", "jay"], pat)
+
+    def test_a_missing_library_costs_nothing(self, monkeypatch):
+        from redactor import prosody
+        monkeypatch.setattr(prosody, "_parser", lambda: None)
+        assert prosody.violations(["any", "words", "at", "all"]) is None
+
+    def test_a_parse_failure_costs_one_candidate(self, monkeypatch):
+        # espeak is wanted for a word CMU cannot pronounce. `scans` already
+        # refuses those, so this is unreachable from the ladder, but a raise
+        # here must not end the run.
+        from redactor import prosody
+
+        class Boom:
+            def Text(self, _):
+                raise RuntimeError("espeak not installed")
+
+        monkeypatch.setattr(prosody, "_parser", Boom)
+        assert prosody.violations(["zxqv"]) is None

@@ -129,6 +129,57 @@ METERS: dict[str, str] = {
 FUNCTION_WORDS = frozenset(["a", "an", "the", "this", "that", "these", "those", "my", "your", "his", "her", "its", "our", "their", "of", "to", "in", "on", "at", "by", "for", "from", "with", "into", "onto", "upon", "as", "than", "and", "or", "but", "nor", "so", "yet", "if", "though", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "has", "have", "had", "will", "would", "shall", "should", "may", "might", "must", "can", "could", "i", "you", "he", "she", "it", "we", "they", "me", "him", "them", "us"])
 
 
+@cache
+def _parser():
+    """prosodic, if it is installed. Imported late: it pulls in pandas."""
+    import contextlib
+    import io
+
+    # It prints thirty lines about installing espeak the moment it loads.
+    # Nothing here reaches the path that wants espeak, so the notice is only
+    # noise in front of a poem.
+    try:
+        with contextlib.redirect_stderr(io.StringIO()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            import prosodic
+    except ImportError:
+        return None
+    return prosodic
+
+
+def violations(words: list[str]) -> float | None:
+    """How badly a line breaks the metre, by Optimality Theory, or None.
+
+    Scansion is a solved problem and `prosodic` solves it, parsing a line
+    against the constraints metrists actually argue about rather than
+    matching a string of stress digits. `scans` cannot tell a line of ten
+    content monosyllables from iambic pentameter, because CMU gives a
+    monosyllable no stress and every position becomes a wildcard. Asked the
+    same two lines, this returns 0 for "When I do count the clock that tells
+    the time" and 5 for "cat dog bird hawk fish owl wren finch crow jay".
+
+    A hand-rolled rule was tried first and measured before it was believed.
+    Marking every content monosyllable stressed rejected 87% of the lines
+    this page already accepts, "an ugly question in your own way" among them,
+    because English demotes stress in a clash and that is a property of the
+    line rather than of any word in it. Which is the argument for the
+    library.
+
+    prosodic wants espeak for a word CMU does not know, and nothing here
+    installs it. That path is unreachable from where this is called: `scans`
+    already refuses a line holding a word CMU cannot pronounce, so every line
+    that gets this far is covered. The guard stays anyway, since an exception
+    here should cost a candidate rather than the run.
+    """
+    parser = _parser()
+    if parser is None:
+        return None
+    try:
+        return float(parser.Text(" ".join(words)).parse().best[0].score)
+    except Exception:  # noqa: BLE001 - any parse failure is one lost candidate
+        return None
+
+
 def content_words(words: list[str]) -> int:
     return sum(1 for w in words if normalize(w) not in FUNCTION_WORDS)
 
