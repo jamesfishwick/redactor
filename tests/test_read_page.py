@@ -202,3 +202,51 @@ class TestSpelledInitialisms:
         from redactor.prosody import syllables
         line = ["do", "it", "for", "AI", "tools", "you", "like", "to", "help", "you"]
         assert sum(syllables(w) for w in line) == 11
+
+
+class TestSectionIsDrawn:
+    """A long page offers many sections, and the maximum is not a choice."""
+
+    def _page(self):
+        # Three sections: one huge, two ordinary, plus one below the floor.
+        pool = []
+        for sec, n in ((0, 4000), (1, 300), (2, 300), (3, 10)):
+            pool += [{"t": f"w{sec}", "chrome": False, "sec": sec}
+                     for _ in range(n)]
+        return pool
+
+    def test_the_longest_does_not_win_every_time(self):
+        import random
+
+        from redactor import dom
+        seen = set()
+        for seed in range(40):
+            got = dom._a_section(self._page(), random.Random(seed))
+            seen.add(got[0]["sec"])
+        assert len(seen) > 1, "every draw returned the same section"
+
+    def test_a_section_under_the_floor_is_never_drawn_alone(self):
+        import random
+
+        from redactor import dom
+        for seed in range(40):
+            got = dom._a_section(self._page(), random.Random(seed))
+            assert got[0]["sec"] != 3
+
+    def test_weight_is_capped_where_the_enumerator_stops(self):
+        # Without the cap a section far past the limit would take nearly
+        # every draw, and the words past it are truncated anyway.
+        import random
+
+        from redactor import dom
+        pool = [{"t": "a", "chrome": False, "sec": 0}
+                for _ in range(dom.SECTION_CAP * 50)]
+        pool += [{"t": "b", "chrome": False, "sec": 1} for _ in range(5000)]
+        drawn = {dom._a_section(pool, random.Random(s))[0]["sec"]
+                 for s in range(40)}
+        assert 1 in drawn
+
+    def test_a_short_page_is_left_whole(self):
+        from redactor import dom
+        pool = [{"t": "a", "chrome": False, "sec": 0} for _ in range(50)]
+        assert len(dom._a_section(pool)) == 50
