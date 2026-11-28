@@ -396,6 +396,9 @@ def read_page(url: str, png, *, width: int = 1100, height: int = 5000,
             log(f"section {section!r} gave {len(words)} words")
 
     if words is None or len(words) < least:
+        if log:
+            log(f"the DOM gave {0 if words is None else len(words)} words, "
+                f"reading the page again with OCR")
         try:
             shot = source.screenshot(url, png, width=width, height=height)
             html = source.page_html(url)
@@ -414,6 +417,12 @@ def read_page(url: str, png, *, width: int = 1100, height: int = 5000,
             if words is None:
                 return None
 
+    # This check is what keeps the words and the image a matched pair, so it
+    # cannot be relaxed on its own. OCR writes its screenshot over the DOM's
+    # capture and at a different scale, while the words are only replaced when
+    # OCR returns more of them, so "DOM words, OCR image" is a reachable
+    # assignment and its boxes would land nowhere near the text. Every path
+    # that reaches it is under `least` and refused here.
     if words is None or len(words) < least:
         return None
     return words, shot
