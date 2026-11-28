@@ -171,3 +171,34 @@ class TestTearSparesTheType:
         rect = next(c[c.index("-draw") + 1] for c in drawn if "-draw" in c)
         right = int(rect.split()[-1].split(",")[0])
         assert right == 64                      # 124 + 40 - 100
+
+
+class TestSpelledInitialisms:
+    """CMU answers for the word when a word shares an initialism's spelling."""
+
+    def test_an_initialism_is_read_letter_by_letter(self):
+        from redactor.prosody import syllables
+        assert syllables("AI") == 2
+
+    def test_the_lowercase_word_keeps_its_own_reading(self):
+        # Capitalisation is the only evidence available, so lowercase stays
+        # the animal CMU has an entry for.
+        from redactor.prosody import syllables
+        assert syllables("ai") == 1
+
+    def test_initialisms_cmu_already_knows_are_left_alone(self):
+        # These are right in CMU because it holds them under their own
+        # entries, so listing them here would add a way to be wrong.
+        from redactor.prosody import syllables
+        assert syllables("FBI") == 3
+        assert syllables("HTML") == 4
+        assert syllables("URL") == 3
+
+    def test_an_acronym_said_as_a_word_is_not_spelled_out(self):
+        from redactor.prosody import syllables
+        assert syllables("NASA") == 2
+
+    def test_the_line_this_came_from_no_longer_scans_as_ten(self):
+        from redactor.prosody import syllables
+        line = ["do", "it", "for", "AI", "tools", "you", "like", "to", "help", "you"]
+        assert sum(syllables(w) for w in line) == 11

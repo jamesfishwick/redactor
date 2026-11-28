@@ -19,9 +19,26 @@ def normalize(word: str) -> str:
     return _WORD.sub("", word).lower()
 
 
+# Initialisms an ordinary word is spelled the same as. CMU reads most
+# initialisms correctly on its own, because it holds them under their own
+# entries: FBI is three syllables there, HTML four, URL three. It only fails
+# where a word collides with one, and then it answers for the word. `ai` is
+# the sloth, one syllable, so a line ending "help you" scanned as ten when a
+# reader says eleven.
+#
+# Listed here is the arbitrary part, which is that these are read letter by
+# letter at all. How long that takes is still counted from the letters, so
+# nothing here has to be revised if one of them grows.
+SPELLED = frozenset({"AI"})
+
+
 @cache
 def syllables(word: str) -> int:
     """Syllable count, or a vowel-group estimate for words CMU doesn't know."""
+    letters = _WORD.sub("", word)
+    # Capitalisation is the evidence, so lowercase `ai` stays the animal.
+    if len(letters) > 1 and letters in SPELLED:
+        return sum(syllables(c) for c in letters)
     w = normalize(word)
     if not w:
         return 0
