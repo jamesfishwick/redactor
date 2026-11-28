@@ -208,3 +208,344 @@ class TestScansionEvidence:
     def test_content_words_ignores_function_words(self):
         from redactor.prosody import content_words
         assert content_words("the clock that tells the time".split()) == 3
+
+
+class TestVisualRuns:
+    def _laid_out(self, tokens, lines):
+        """Words with explicit page-line ids, as OCR would report them."""
+        from redactor.source import Word
+        return [Word(t, left=0, top=0, width=10, height=10, line=l)
+                for t, l in zip(tokens, lines)]
+
+    def test_a_run_cannot_cross_a_page_line(self):
+        from redactor.candidates import Enumerator
+        # adjacent in reading order, but the page puts them in different blocks
+        src = "I thought I would sail about a little and see".split()
+        same = self._laid_out(src, ["1-1-1"] * len(src))
+        split = self._laid_out(src, ["1-1-1"] * 5 + ["9-9-9"] * 5)
+        assert Enumerator(same, (10,), max_runs=1).count() >= \
+               Enumerator(split, (10,), max_runs=1).count()
+
+    def test_one_run_stays_on_one_line(self):
+        from redactor.candidates import Enumerator
+        src = "I thought I would sail about a little and see the watery part".split()
+        w = self._laid_out(src, ["a"] * 6 + ["b"] * 7)
+        for c in Enumerator(w, (10,), max_runs=1).all():
+            idx = c.indices()
+            assert len({w[i].line for i in idx}) == 1
+
+    def test_count_still_agrees_with_enumeration(self):
+        from redactor.candidates import Enumerator
+        src = "I thought I would sail about a little and see the watery part".split()
+        w = self._laid_out(src, ["a"] * 6 + ["b"] * 7)
+        e = Enumerator(w, (10,), max_runs=2)
+        assert e.count() == len(e.all())
+
+
+class TestLongPages:
+    def test_a_long_page_does_not_blow_the_stack(self):
+        from redactor.candidates import Enumerator
+        from redactor.source import Word
+        # far past the default recursion limit, which the DOM reader reaches
+        src = ("I thought I would sail about a little and see the watery "
+               "part of the world ") * 400
+        w = [Word(t, left=0, top=0, width=9, height=9, line="a")
+             for t in src.split()]
+        assert len(w) > 5000
+        # capped below Python's frame limit rather than overflowing it
+        assert Enumerator(w, (5, 7, 5), max_runs=1, limit=20).all()
+        assert Enumerator(w, (5, 7, 5), max_runs=1).MAX_WORDS < 1000
+
+
+class TestSpace:
+    def _page(self, repeat=1):
+        from redactor.source import Word
+        src = (MOBY * repeat)
+        return [Word(t, left=0, top=0, width=9, height=9, line=f"l{i // 12}")
+                for i, t in enumerate(src)]
+
+    def test_count_agrees_with_the_recursive_enumerator(self):
+        from redactor.candidates import Enumerator, Space
+        w = self._page()
+        assert Space(w, (5, 7, 5), max_runs=2).count() == \
+               Enumerator(w, (5, 7, 5), max_runs=2).count()
+
+    def test_handles_a_page_that_overflows_recursion(self):
+        from redactor.candidates import Space
+        w = self._page(repeat=40)      # ~1700 words
+        assert len(w) > 1500
+        assert Space(w, (5, 7, 5), max_runs=2).count() > 0
+
+    def test_samples_are_valid_poems(self):
+        from redactor.candidates import Space, is_subsequence
+        from redactor.prosody import syllables
+        w = self._page(repeat=3)
+        space = Space(w, (5, 7, 5), max_runs=2)
+        for c in space.sample(25, __import__("random").Random(1)):
+            counts = [sum(syllables(w[i].text) for i in line) for line in c.lines]
+            assert counts == [5, 7, 5]
+            assert is_subsequence([w[i].text for i in c.indices()],
+                                  [x.text for x in w])
+
+    def test_sampling_spreads_across_the_page(self):
+        from redactor.candidates import Space
+        w = self._page(repeat=6)
+        got = Space(w, (5, 7, 5), max_runs=2).sample(40, __import__("random").Random(2))
+        starts = [c.indices()[0] for c in got]
+        # a slice of the enumeration would cluster; a sample should not
+        assert max(starts) - min(starts) > len(w) // 4
+
+    def test_empty_space_samples_nothing(self):
+        from redactor.candidates import Space
+        from redactor.source import Word
+        assert Space([Word("cat")], (5, 7, 5), max_runs=2).sample(5) == []
+
+
+class TestSectionSlice:
+    def _words(self, text):
+        from redactor.source import Word
+        return [Word(t, left=0, top=0, width=9, height=9, line="l")
+                for t in text.split()]
+
+    def test_takes_the_named_section(self):
+        from redactor.dom import slice_between
+        w = self._words("preamble here § 106 exclusive rights blah "
+                        "§ 107 fair use is a defense § 108 libraries may copy")
+        got = [x.text for x in slice_between(w, "§ 107", "§ 108")]
+        assert "fair" in got and "use" in got
+        assert "libraries" not in got
+        assert "exclusive" not in got
+
+    def test_runs_to_the_end_without_an_end_marker(self):
+        from redactor.dom import slice_between
+        w = self._words("alpha beta § 107 gamma delta")
+        got = [x.text for x in slice_between(w, "§ 107")]
+        assert "gamma" in got and "alpha" not in got
+
+    def test_missing_start_yields_nothing(self):
+        from redactor.dom import slice_between
+        assert slice_between(self._words("alpha beta"), "§ 999") == []
+
+    def test_matches_across_whitespace_and_case(self):
+        from redactor.dom import slice_between
+        w = self._words("x § 107 Fair Use y")
+        assert slice_between(w, "§ 107 fair use") != []
+
+
+class TestLargestSection:
+    def _read(self, groups):
+        from redactor.dom import Read
+        from redactor.source import Word
+        words, secs = [], []
+        for n, (sec, count) in enumerate(groups):
+            for i in range(count):
+                words.append(Word(f"w{sec}_{i}", left=0, top=0,
+                                  width=9, height=9, line=f"l{sec}"))
+                secs.append(sec)
+        return Read(words, "x.png", "t", secs)
+
+    def test_picks_the_longest_run_under_one_heading(self):
+        from redactor.dom import largest_section
+        got = largest_section(self._read([(0, 50), (1, 400), (2, 60)]), floor=150)
+        assert len(got) == 400
+        assert all(w.text.startswith("w1_") for w in got)
+
+    def test_keeps_the_whole_page_when_no_section_is_big_enough(self):
+        from redactor.dom import largest_section
+        r = self._read([(0, 100), (1, 120), (2, 110)])
+        assert len(largest_section(r, floor=150)) == len(r.words)
+
+    def test_short_pages_are_left_alone(self):
+        from redactor.dom import largest_section
+        r = self._read([(0, 40), (1, 60)])
+        assert largest_section(r, floor=150) == r.words
+
+
+class TestMeteredSpace:
+    def _words(self, text):
+        from redactor.source import Word
+        return [Word(t, left=0, top=0, width=9, height=9, line="l")
+                for t in text.split()]
+
+    def test_every_sample_already_scans(self):
+        from redactor.candidates import Space
+        from redactor.prosody import METERS, scans
+        w = self._words(" ".join(MOBY * 4))
+        got = Space(w, (10,), max_runs=2,
+                    meter=METERS["pentameter"]).sample(40, __import__("random").Random(3))
+        assert got
+        for c in got:
+            assert scans([w[i].text for i in c.indices()], "0101010101",
+                         min_fixed=0, min_content=0)
+
+    def test_metered_space_is_a_subset_of_the_plain_one(self):
+        from redactor.candidates import Space
+        from redactor.prosody import METERS
+        w = self._words(" ".join(MOBY * 2))
+        plain = Space(w, (10,), max_runs=2).count()
+        metered = Space(w, (10,), max_runs=2, meter=METERS["pentameter"]).count()
+        assert 0 < metered < plain
+
+    def test_an_unsatisfiable_meter_counts_zero(self):
+        from redactor.candidates import Space
+        # ten syllables of one trochee repeated cannot be iambic
+        w = self._words("watery watery watery watery")
+        assert Space(w, (10,), max_runs=4, meter="0101010101").count() == 0
+
+
+class TestSectionRequests:
+    def test_reads_a_named_section_from_the_title(self):
+        from redactor.agent import SECTION_IN_TITLE, URL_IN_TITLE
+        title = "erase: https://example.com/doc section: § 107 Fair use"
+        assert URL_IN_TITLE.search(title).group(1) == "https://example.com/doc"
+        assert SECTION_IN_TITLE.search(title).group(1) == "§ 107 Fair use"
+
+    def test_a_plain_request_names_no_section(self):
+        from redactor.agent import SECTION_IN_TITLE
+        assert SECTION_IN_TITLE.search("erase: https://example.com") is None
+
+
+class TestNamedSection:
+    def _read(self, groups):
+        from redactor.dom import Read
+        from redactor.source import Word
+        words, secs = [], []
+        for sec, tokens in groups:
+            for t in tokens.split():
+                words.append(Word(t, left=0, top=0, width=9, height=9,
+                                  line=f"l{sec}"))
+                secs.append(sec)
+        return Read(words, "x.png", "t", secs)
+
+    def test_stops_at_the_next_heading(self):
+        from redactor.dom import named_section
+        r = self._read([(0, "intro words here"),
+                        (1, "107. Fair use"),
+                        (2, "is a defense to infringement of copyright"),
+                        (3, "108. Libraries"),
+                        (4, "may reproduce copies")])
+        got = [w.text for w in named_section(r, "107. Fair use")]
+        assert "defense" in got and "copyright" in got
+        assert "Libraries" not in got and "reproduce" not in got
+        assert "intro" not in got
+
+    def test_unknown_heading_returns_nothing(self):
+        from redactor.dom import named_section
+        r = self._read([(0, "alpha beta gamma")])
+        assert named_section(r, "999. Nope") == []
+
+    def test_caps_a_runaway_section(self):
+        from redactor.dom import named_section
+        r = self._read([(0, "start " + "word " * 9000)])
+        assert len(named_section(r, "start", cap=500)) == 500
+
+
+class TestTightCrop:
+    def test_frame_spans_the_kept_words_not_the_page(self, tmp_path, monkeypatch):
+        import subprocess as sp
+        from redactor import render
+        from redactor.source import Word
+        calls = []
+        monkeypatch.setattr(sp, "run", lambda *a, **k: calls.append(a[0]) or
+                            sp.CompletedProcess(a[0], 0))
+        words = [Word("a", left=10, top=0, width=20, height=10, line="P-0"),
+                 Word("b", left=10, top=5000, width=20, height=10, line="P-5000"),
+                 Word("c", left=10, top=9000, width=20, height=10, line="P-9000")]
+        render.erase(tmp_path / "p.png", words, [1], tmp_path / "out.png")
+        crop = next(c[c.index("-crop") + 1] for c in calls if "-crop" in c)
+        height = int(crop.split("x")[1].split("+")[0])
+        # the kept word sits at 5000 with a 40px margin, so the frame is small
+        assert height < 200
+
+
+class TestChallengePages:
+    def test_spots_a_bot_wall(self):
+        from redactor.dom import is_challenge
+        assert is_challenge(
+            "Performing security verification This website uses a security "
+            "service to protect against malicious bots".split())
+
+    def test_spots_a_cloudflare_interstitial(self):
+        from redactor.dom import is_challenge
+        assert is_challenge("Just a moment ... Enable JavaScript and cookies "
+                            "to continue".split())
+
+    def test_leaves_an_ordinary_page_alone(self):
+        from redactor.dom import is_challenge
+        assert not is_challenge(MOBY)
+
+    def test_only_looks_at_the_opening(self):
+        from redactor.dom import is_challenge
+        # the phrase appearing deep in a long article is not a challenge
+        assert not is_challenge(MOBY * 3 + ["just", "a", "moment"])
+
+
+class TestSectionReachesTheReader:
+    def test_erase_page_passes_the_section_to_the_reader(self, monkeypatch):
+        from redactor import agent, dom
+        seen = {}
+
+        def fake_read(url, png, **kw):
+            seen.update(kw)
+            return None
+
+        monkeypatch.setattr(dom, "read", fake_read)
+        monkeypatch.setattr(agent, "MIN_WORDS", 1)
+        agent.erase_page("https://example.com", out=__import__("pathlib").Path("/tmp"),
+                         section="§ 107")
+        assert seen.get("section") == "§ 107"
+
+
+class TestWhiteoutGate:
+    def _words(self, line):
+        from redactor.source import Word
+        return [Word(t, left=i * 30, top=0, width=25, height=10, line=line)
+                for i, t in enumerate("alpha beta gamma delta".split())]
+
+    def _mode_used(self, words, monkeypatch, tmp_path):
+        import subprocess as sp
+        from redactor import render
+        calls = []
+        monkeypatch.setattr(sp, "run", lambda *a, **k: calls.append(a[0]) or
+                            sp.CompletedProcess(a[0], 0, stdout="400"))
+        render.erase(tmp_path / "p.png", words, [1], tmp_path / "o.png",
+                     mode="whiteout")
+        # blackout paints the whole strip, whiteout only bars what went
+        painted = [c for c in calls
+                   if "-draw" in c and any(d.startswith("rectangle 0,0") for d in c)]
+        return "blackout" if painted else "whiteout"
+
+    def test_dom_words_may_use_whiteout(self, monkeypatch, tmp_path):
+        assert self._mode_used(self._words("P-120"), monkeypatch, tmp_path) \
+               == "whiteout"
+
+    def test_ocr_words_fall_back_to_blackout(self, monkeypatch, tmp_path):
+        # OCR labels lines by block-paragraph-line, so a missed word would get
+        # no bar and stay legible under whiteout
+        assert self._mode_used(self._words("5-1-2"), monkeypatch, tmp_path) \
+               == "blackout"
+
+
+class TestBudgetFallthrough:
+    def _page(self):
+        from redactor.source import Word
+        src = ("I thought I would sail about a little and see the watery "
+               "part of the world ") * 12
+        return [Word(t, left=0, top=0, width=9, height=9, line=f"P-{i // 11}")
+                for i, t in enumerate(src.split())]
+
+    def test_a_spent_budget_still_reaches_an_easier_form(self):
+        from redactor import ladder
+        w = self._page()
+        assert ladder.climb(w, max_runs=2) is not None
+        # metered rungs get nothing, but a syllabic one needs no sampling budget
+        fallen = ladder.climb(w, max_runs=2, budget_s=0.0)
+        assert fallen is not None
+        assert fallen.metered is False
+
+    def test_the_budget_is_per_rung(self):
+        import inspect
+        from redactor import ladder
+        body = inspect.getsource(ladder.climb)
+        # the deadline is set inside the loop over rungs, not before it
+        assert body.index("for name in RUNGS") < body.index("deadline =")

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import candidates as cand
-from . import compare, ladder, publish, rank, render, shapes, source, tagging
+from . import agent, compare, ladder, publish, rank, render, shapes, source, tagging
 from .prosody import FORMS, METERS
 
 
@@ -81,8 +81,7 @@ def main(argv=None) -> int:
             print(f"pos: {len(tri)} trigrams learned from the source", file=sys.stderr)
 
     if args.form == "auto":
-        rung = ladder.climb(words, max_runs=args.runs, pos_tags=tags,
-                            trigrams=tri)
+        rung = ladder.climb(words, max_runs=args.runs)
         if rung is None:
             shape_used = next(
                 (sh for sh in ladder.FALLBACK_SHAPES
@@ -102,6 +101,7 @@ def main(argv=None) -> int:
                 print(f"\nwrote {dest}", file=sys.stderr)
             return 0
         found = rung.candidates
+        pool = rung.pool
         form_label = rung.form
         print(f"form: {ladder.describe(rung)}", file=sys.stderr)
     else:
@@ -109,6 +109,7 @@ def main(argv=None) -> int:
                             allowed_trigrams=tri, meter=METERS.get(args.form))
         found = e.all()
         form_label = args.form
+        pool = len(found)
         print(f"candidates: {len(found)} ({args.form}, <={args.runs} runs)",
               file=sys.stderr)
     if not found:
@@ -157,7 +158,7 @@ def main(argv=None) -> int:
             return 0
         written = publish.publish(
             conn, args.publish, url=args.url, poem=chosen.render(words),
-            form=form_label, pool=len(found), note=note, image=dest)
+            form=form_label, pool=pool, note=note, image=dest)
         for kind, link in written.items():
             print(f"published {kind}: {link}", file=sys.stderr)
     return 0
