@@ -63,11 +63,29 @@ def discover(provider: str = "openrouter") -> str | None:
     return None
 
 
+def _why(err) -> str:
+    """The gateway's own account of a refusal, which carries the remedy.
+
+    A connector out of prepaid credit answers 403 with the dashboard URL that
+    tops it up. Discarding the body leaves the caller unable to tell that from
+    having no connector at all.
+    """
+    try:
+        payload = json.loads(err.read().decode())
+    except (ValueError, OSError):
+        return str(getattr(err, "reason", "")) or "no reason given"
+    message = (payload.get("error") or {}).get("message")
+    return message or str(payload)[:300]
+
+
 def by_gateway(candidates, words, url: str, connection: str | None = None,
-               model: str | None = None, shortlist: int = 60, timeout: int = 120):
+               model: str | None = None, shortlist: int = 60,
+               timeout: int = 120, log=None):
     """Rank through a Sprites connector. Returns (candidate, note) or None."""
     connection = connection or discover()
     if not connection:
+        if log:
+            log("no openrouter connector is attached to this Sprite")
         return None
     model = model or os.environ.get("REDACTOR_MODEL", DEFAULT_MODEL)
 
@@ -86,7 +104,14 @@ def by_gateway(candidates, words, url: str, connection: str | None = None,
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             reply = json.load(r)
-    except (urllib.error.URLError, OSError, ValueError):
+    except urllib.error.HTTPError as err:
+        # Checked before URLError, which it subclasses, so the body survives.
+        if log:
+            log(f"the openrouter connector answered {err.code}: {_why(err)}")
+        return None
+    except (urllib.error.URLError, OSError, ValueError) as err:
+        if log:
+            log(f"the openrouter connector could not be reached: {err}")
         return None
 
     try:
@@ -105,7 +130,7 @@ def by_gateway(candidates, words, url: str, connection: str | None = None,
 
 
 def by_claude_code(candidates, words, url: str, shortlist: int = 60,
-                   timeout: int = 180):
+                   timeout: int = 180, log=None):
     """Rank with the Claude Code binary a Sprite already carries.
 
     This bills a Claude subscription rather than an API key, which is the
@@ -118,6 +143,8 @@ def by_claude_code(candidates, words, url: str, shortlist: int = 60,
 
     exe = shutil.which("claude")
     if not exe:
+        if log:
+            log("the claude binary is not on PATH")
         return None
     pool = candidates[:shortlist]
     listing = "\n\n".join(f"{n + 1}.\n{c.render(words)}" for n, c in enumerate(pool))
@@ -130,6 +157,8 @@ def by_claude_code(candidates, words, url: str, shortlist: int = 60,
         return None
     text = proc.stdout.strip()
     if not text or "Not logged in" in text:
+        if log:
+            log("the claude binary is present but not logged in")
         return None
     head, _, note = text.partition("\n")
     digits = "".join(ch for ch in head if ch.isdigit())
@@ -141,11 +170,23 @@ def by_claude_code(candidates, words, url: str, shortlist: int = 60,
     return pool[idx], note.strip()
 
 
-def by_model(candidates, words, url: str, **kw):
+def by_model(candidates, words, url: str, *, log=None, **kw):
     """Try each ranker in turn; fall through to None so the caller can choose
-    arbitrarily rather than fail."""
+    arbitrarily rather than fail.
+
+    Each one says why it passed, because the three ways of getting no poem
+    ranked are a missing connector, a connector that refused, and a missing
+    binary, and they are worth telling apart.
+
+    `kw` reaches the gateway alone, since a connection id and a model name
+    mean nothing to the other. It used to be accepted here and dropped, so a
+    caller naming a connection quietly got whichever one discovery found.
+    """
     for ranker in (by_gateway, by_claude_code):
-        got = ranker(candidates, words, url)
+        got = ranker(candidates, words, url, log=log,
+                     **(kw if ranker is by_gateway else {}))
         if got:
+            if log:
+                log(f"ranked by {ranker.__name__.removeprefix('by_')}")
             return got
     return None

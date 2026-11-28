@@ -8,6 +8,8 @@ every cover rectangle in the wrong place. These pin that it cannot.
 
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from redactor import dom, source
@@ -81,3 +83,55 @@ class TestReadPage:
                           ["Verifying", "you", "are", "human", "This", "may", "take", "a", "few", "seconds"]]
         monkeypatch.setattr(dom, "is_challenge", lambda ws: True)
         assert dom.read_page("u", tmp_path / "p.png", least=1) is None
+
+
+class TestRankerSaysWhy:
+    """Three ways to get no ranking, and they are worth telling apart."""
+
+    def _pool(self):
+        from redactor.candidates import Candidate
+        return [Candidate(((0, 1),), 1)], [Word("a"), Word("b")]
+
+    def test_a_refusing_connector_reports_what_it_said(self, monkeypatch):
+        import urllib.error
+
+        from redactor import rank
+
+        def refuse(req, timeout=None):
+            raise urllib.error.HTTPError(
+                req.full_url, 403, "Forbidden", {},
+                io.BytesIO(b'{"error":{"message":"credits are exhausted"}}'))
+
+        monkeypatch.setattr(rank, "discover", lambda *a, **k: "conn-1")
+        monkeypatch.setattr(rank.urllib.request, "urlopen", refuse)
+        said = []
+        pool, words = self._pool()
+        assert rank.by_gateway(pool, words, "u", log=said.append) is None
+        assert "403" in said[0]
+        assert "credits are exhausted" in said[0]
+
+    def test_a_missing_connector_says_so_instead(self, monkeypatch):
+        from redactor import rank
+        monkeypatch.setattr(rank, "discover", lambda *a, **k: None)
+        said = []
+        pool, words = self._pool()
+        assert rank.by_gateway(pool, words, "u", log=said.append) is None
+        assert "no openrouter connector" in said[0]
+
+    def test_by_model_hands_the_gateway_its_arguments(self, monkeypatch):
+        # These were accepted and dropped, so naming a connection silently
+        # got whichever one discovery happened to find.
+        from redactor import rank
+        seen = {}
+
+        def spy(candidates, words, url, connection=None, model=None,
+                shortlist=60, timeout=120, log=None):
+            seen["connection"] = connection
+            return
+
+        monkeypatch.setattr(rank, "by_gateway", spy)
+        monkeypatch.setattr(rank, "by_claude_code",
+                            lambda *a, **k: None)
+        pool, words = self._pool()
+        rank.by_model(pool, words, "u", connection="chosen-by-caller")
+        assert seen["connection"] == "chosen-by-caller"
