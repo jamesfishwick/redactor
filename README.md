@@ -39,20 +39,25 @@ A form alone is not a constraint worth having. The 43-word opening of _Moby-Dick
 Call me Some never / how precisely, having no / me on thought a the
 ```
 
-Three filters cut that to something a reader can be shown. Measured on the same paragraph:
+Two filters cut that to something a reader can be shown.
+
+<!-- measured:constraints -->
+
+Measured on the 43-word opening of _Moby-Dick_, counting 5/7/5 erasures. Trigrams are learned from the paragraph itself, as the tool does, giving a vocabulary of 40.
 
 | constraint                 | candidates     |
 | -------------------------- | -------------- |
 | none                       | 15,829,992,033 |
-| POS bigram                 | 6,858,150,007  |
-| POS trigram                | 75,156,809     |
+| POS trigram                | 3,616          |
 | contiguity, 3 runs         | 89,813         |
 | contiguity, 2 runs         | 1,643          |
-| contiguity 2 + POS trigram | 102            |
+| contiguity 2 + POS trigram | 95             |
 
-Contiguity does nearly all the work. The reason is better than the number: the source is already grammatical, so keeping its spans intact inherits its syntax outright, with no parser and no model. Part-of-speech transitions only check tag pairs, which is a much weaker proxy for the same thing.
+<!-- /measured:constraints -->
 
-At 102 the whole set can be enumerated and read, so a model never has to generate anything. It ranks. That removes invented words, miscounted syllables and reordered lines as possibilities rather than as bugs to catch.
+Contiguity is the one to keep. It cuts further on its own, it needs no model and no tagger, and the reason is better than the number: the source is already grammatical, so keeping its spans intact inherits its syntax outright. Part-of-speech transitions only check tag triples, a weaker proxy for the same thing, and one whose strength depends entirely on how much text the triples were learned from. That parameter went unstated the first time this table was written, which is why the caption carries it now.
+
+Once the set is small enough to enumerate and read, a model never has to generate anything. It ranks. That removes invented words, miscounted syllables and reordered lines as possibilities rather than as bugs to catch.
 
 ## Use
 
@@ -68,18 +73,28 @@ redactor https://example.com --style black     # bars instead of correction flui
 
 `--form auto` is the default. It climbs to the hardest form the page will admit and tells you which one that was.
 
-Difficulty here is measured, not asserted: it is how rarely a page admits the form at all. Of the erasures of 260 words that fit by syllable count, these fractions also scan.
+Difficulty here is measured, not asserted: it is how rarely a page admits the form at all, out of the erasures that fit it by syllable count.
 
-| form         | admits | kind                        |
-| ------------ | ------ | --------------------------- |
-| `ballad`     | 0.01%  | 8 6 8 6, alternating stress |
-| `pentameter` | 12.54% | 10 syllables, 0101010101    |
-| `tetrameter` | 20.34% | 8 syllables, 01010101       |
-| `fib`        | 100%   | 1 1 2 3 5 8                 |
-| `cinquain`   | 100%   | 2 4 6 8 2                   |
-| `tanka`      | 100%   | 5 7 5 7 7                   |
-| `lune`       | 100%   | 5 3 5                       |
-| `haiku`      | 100%   | 5 7 5                       |
+<!-- measured:forms -->
+
+Measured on [https://theangrygm.com/ask-angry-journey-home/](https://theangrygm.com/ask-angry-journey-home/), 1,975 words of article.
+
+| form         | admits  | of        | shape                       |
+| ------------ | ------- | --------- | --------------------------- |
+| `quatrain`   | 0.03%   | 1,951,963 | 8/6/8/6, rhymed .A.A        |
+| `couplet`    | 0.20%   | 5,007,538 | 10/10, rhymed AA            |
+| `ballad`     | 3.52%   | 1,951,963 | 8/6/8/6, alternating stress |
+| `pentameter` | 27.18%  | 5,900,413 | 10, alternating stress      |
+| `tetrameter` | 36.86%  | 5,080,958 | 8, alternating stress       |
+| `fib`        | 100.00% | 1,116,150 | 1/1/2/3/5/8                 |
+| `cinquain`   | 100.00% | 1,587,247 | 2/4/6/8/2                   |
+| `tanka`      | 100.00% | 1,113,366 | 5/7/5/7/7                   |
+| `lune`       | 100.00% | 3,522,550 | 5/3/5                       |
+| `haiku`      | 100.00% | 3,753,727 | 5/7/5                       |
+
+Regenerate with `scripts/measure.py forms https://theangrygm.com/ask-angry-journey-home/`.
+
+<!-- /measured:forms -->
 
 The syllabic forms admit everything that fits them because they have no stress requirement to fail.
 

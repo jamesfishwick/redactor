@@ -1,13 +1,12 @@
 """Try the hardest form a page can satisfy, and say which rung it reached.
 
 Difficulty is measured, not asserted: it is how rarely a page admits the form
-at all. On 260 words of one page, out of the erasures that fit each shape by
-syllable count, these fractions also scan:
-
-    ballad          0.01%        9 of 118,302
-    pentameter     12.54%   16,297 of 129,965
-    tetrameter     20.34%   20,533 of 100,928
-    haiku         100%     (no stress requirement to fail)
+at all, out of the erasures that fit it by syllable count. The figures are in
+README.md and come from scripts/measure.py, because they are a property of
+whichever page is being erased and go stale the moment that page changes.
+Rhymed forms sit at the top, and they need a large page before they admit
+anything: on one article of 1,975 words the first 260 admitted no rhymed poem
+of either shape.
 
 The ordering is worth more than a difficulty badge. A tight metrical form can
 only be satisfied by long contiguous spans, so its output inherits the source's

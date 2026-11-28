@@ -1,9 +1,13 @@
 """Optional part-of-speech pruning.
 
 Trigrams are learned from the source itself rather than shipped, so the filter
-reflects the register being erased. Bigrams were measured and discarded: they
-cut the candidate space by 2x, because almost any tag may follow any other.
-Trigrams manage 211x, which is worth having but still leaves millions.
+reflects the register being erased. That also means its strength depends on
+how much text it saw: a short source yields a small trigram vocabulary and so
+a harsh filter. scripts/measure.py prints the vocabulary size alongside the
+counts for that reason.
+
+Bigrams were measured and discarded. Almost any tag may follow any other, so
+they cut the space by about half, which is not worth a tagger.
 """
 
 from __future__ import annotations

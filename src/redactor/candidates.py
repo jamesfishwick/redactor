@@ -4,20 +4,16 @@ An erasure may only delete, so every candidate is a subsequence of the source
 in its original order. On its own that is far too permissive: a 43-word
 paragraph holds about 1.6e10 valid haiku, essentially all of them word salad.
 
-Three constraints cut it to something a reader can be shown, measured on the
-opening of Moby-Dick:
+Two constraints cut that to a set a reader can be shown, contiguity and a
+part-of-speech trigram filter. The counts live in README.md and are produced
+by scripts/measure.py, not copied here, because the copy that used to sit in
+this docstring was four orders of magnitude out and nothing could tell.
 
-    none                      15,829,992,033
-    POS bigram                 6,858,150,007
-    POS trigram                   75,156,809
-    contiguity <= 3 runs              89,813
-    contiguity <= 2 runs               1,643
-    contiguity <= 2 + trigram            102
-
-Contiguity does nearly all the work, and for a reason worth keeping in mind:
+Contiguity does the work worth having, for a reason that outlasts any count:
 the source is already grammatical, so preserving its spans inherits its syntax
-outright. Part-of-speech transitions only check tag pairs, which is a far
-weaker proxy for the same thing.
+outright. Part-of-speech transitions only check tag triples, a weaker proxy
+for the same thing, and one whose strength depends on how much text the
+triples were learned from.
 """
 
 from __future__ import annotations
