@@ -151,9 +151,17 @@ def words_from_tsv(tsv: str, min_conf: float = MIN_CONF) -> list[Word]:
     DictReader raises at construction, where it would otherwise go on parsing
     with quoting restored.
     """
+    reader = csv.DictReader(io.StringIO(tsv), delimiter="\t",
+                            quoting=csv.QUOTE_NONE, quotechar=None)
+    # DictReader takes the first line as the header whatever it holds, so a
+    # caller that strips Tesseract's header loses its first word and gets a
+    # list one short with no error.
+    if "text" not in (reader.fieldnames or ()):
+        raise ValueError(
+            f"first line is not a Tesseract TSV header: {reader.fieldnames}")
+
     words = []
-    for row in csv.DictReader(io.StringIO(tsv), delimiter="\t",
-                              quoting=csv.QUOTE_NONE, quotechar=None):
+    for row in reader:
         text = (row.get("text") or "").strip()
         if not text or not normalize_ok(text):
             continue
